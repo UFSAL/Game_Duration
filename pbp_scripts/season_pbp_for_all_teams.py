@@ -19,6 +19,7 @@ def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
 
         season_pbp = sp.get_season_pbp(season, team_name)
         if not season_pbp.empty:
+            print(f"Saving play-by-play data for {team_name} in {season}.")
             sp.save_pbp_to_csv(season_pbp, team_name, season)
             count += 1
         else:

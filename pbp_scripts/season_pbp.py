@@ -12,7 +12,7 @@ def graceful_fetch_pbp(game_id, retries=3):
     for attempt in range(retries):
         time.sleep(random.uniform(3, 5))
         try:
-            return playbyplayv2.PlayByPlayV2(game_id=game_id).get_data_frames()[0]
+            return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=60).get_data_frames()[0]
         except ReadTimeout:
             print(f"Timeout for game ID {game_id}. Retrying ({attempt + 1}/{retries})...", flush=True)
             time.sleep(5)  # Wait before retrying
@@ -58,6 +58,7 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         count += 1
         all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
 
+    print(f"Completed {count} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
     return all_play_by_play_data
 
 def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
