@@ -34,7 +34,7 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
     all_play_by_play_data = pd.DataFrame()
 
     for game_id in games:
-        time.sleep(random.uniform(1, 3)) # To avoid hitting the API rate limit
+        time.sleep(random.uniform(2, 4)) # To avoid hitting the API rate limit
         play_by_play = playbyplayv2.PlayByPlayV2(game_id=game_id)
         play_by_play_data = play_by_play.get_data_frames()[0]
         if play_by_play_data.empty:
