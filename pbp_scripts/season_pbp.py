@@ -2,9 +2,22 @@ import pandas as pd
 import time
 import random
 import argparse
+from requests.exceptions import ReadTimeout
 from nba_api.stats.static import teams
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
+
+def graceful_fetch_pbp(game_id, retries=3):
+    """ Attempts to fetch play-by-play data for a given game ID with retries on timeout."""
+    for attempt in range(retries):
+        time.sleep(random.uniform(3, 5))
+        try:
+            return playbyplayv2.PlayByPlayV2(game_id=game_id).get_data_frames()[0]
+        except ReadTimeout:
+            print(f"Timeout for game ID {game_id}. Retrying ({attempt + 1}/{retries})...", flush=True)
+            time.sleep(5)  # Wait before retrying
+    print(f"Failed to fetch data for game ID {game_id} after {retries} retries.", flush=True)
+    return None
 
 def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
     """
@@ -29,17 +42,20 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
     gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
     games = gamefinder.get_data_frames()[0].GAME_ID
     if games.empty:
-        raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.")
+        raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
 
     all_play_by_play_data = pd.DataFrame()
-
+    count = 1
     for game_id in games:
-        time.sleep(random.uniform(2, 4)) # To avoid hitting the API rate limit
-        play_by_play = playbyplayv2.PlayByPlayV2(game_id=game_id)
-        play_by_play_data = play_by_play.get_data_frames()[0]
-        if play_by_play_data.empty:
-            print(f"game id {game_id} contains no play-by-play data. This might be a preseason game.")
+        print(f"{count}/{len(games)} Fetching play-by-play data for game ID {game_id}...", flush=True)
+        play_by_play_data = graceful_fetch_pbp(game_id)
+        if play_by_play_data is None:
+            print(f"Skipping game ID {game_id} due to fetch failure.")
             continue
+        elif play_by_play_data.empty:
+            print(f"game id {game_id} contains no play-by-play data. This might be a preseason game.", flush=True)
+            continue
+        count += 1
         all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
 
     return all_play_by_play_data
