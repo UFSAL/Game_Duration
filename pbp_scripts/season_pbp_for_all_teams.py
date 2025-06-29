@@ -11,7 +11,7 @@ def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
         print(f"{count}/{len(team_names)} Processing play-by-play data for {team_name} in season {season}...")
 
         # Skip data already gathered
-        file_name = f"{team_name}_{season}_pbp.csv"
+        file_name = f"{season}_{team_name}_pbp.csv"
         if pd.io.common.file_exists(file_name):
             print(f"Play-by-play data for {team_name} in {season} already exists. Skipping...")
             count += 1
