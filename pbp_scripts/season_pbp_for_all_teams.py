@@ -2,6 +2,8 @@ import season_pbp as sp
 from nba_api.stats.static import teams
 import pandas as pd
 import argparse
+import time
+import random
 
 def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
     teams_dict = teams.get_teams()
@@ -10,13 +12,16 @@ def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
     for team_name in team_names:
         print(f"{count}/{len(team_names)} Processing play-by-play data for {team_name} in season {season}...")
 
+
         # Skip data already gathered
-        file_name = f"{team_name}_{season}_pbp.csv"
+        file_name = f"{season}_{team_name}_pbp.csv"
         if pd.io.common.file_exists(file_name):
             print(f"Play-by-play data for {team_name} in {season} already exists. Skipping...")
             count += 1
             continue
 
+        # Random delay between teams to avoid rate limiting
+        time.sleep(random.uniform(10, 20))
         season_pbp = sp.get_season_pbp(season, team_name)
         if not season_pbp.empty:
             print(f"Saving play-by-play data for {team_name} in {season}.")
