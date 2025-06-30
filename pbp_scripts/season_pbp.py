@@ -64,6 +64,7 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
 
     print(f"Completed {count - 1} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
+    print(f"Completed {count - 1} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
     return all_play_by_play_data
 
 def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
@@ -79,6 +80,7 @@ def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
         print(f"No data available to save for {team_name} in {season}.")
         return
 
+    file_name = f"{season}_{team_name}_pbp.csv"
     file_name = f"{season}_{team_name}_pbp.csv"
     data.to_csv(file_name, index=False)
     print(f"Play-by-play data saved to {file_name}.")
