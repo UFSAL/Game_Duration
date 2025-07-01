@@ -8,10 +8,10 @@ import random
 def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
     teams_dict = teams.get_teams()
     team_names = [team['nickname'] for team in teams_dict] 
+    teams_set = set(team_names)
     count = 1
-    for team_name in team_names:
-        print(f"{count}/{len(team_names)} Processing play-by-play data for {team_name} in season {season}...")
-
+    for team_name in teams_set:
+        print(f"{count}/{len(teams_set)} Processing play-by-play data for {team_name} in season {season}...")
 
         # Skip data already gathered
         file_name = f"{season}_{team_name}_pbp.csv"

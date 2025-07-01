@@ -13,14 +13,14 @@ def graceful_fetch_pbp(game_id):
     backoff = 2  # Initial backoff time in seconds
     attempt = 0
     while True:
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(2, 7))
         try:
             return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=60).get_data_frames()[0]
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
             attempt += 1
             print(f"Attempt {attempt}: Timeout or connection error for game ID {game_id}. Retrying with backoff {backoff}s...", flush=True)
             time.sleep(backoff)  # Exponential backoff
-            backoff = min(backoff * 2, 200)  # Double the backoff time for the next attempt
+            backoff = min(backoff * 2, 256)  # Double the backoff time for the next attempt
         except Exception as e:
             print(f"An unexpected error occurred for game ID {game_id}: {e}", flush=True)
 
@@ -51,19 +51,23 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
 
     all_play_by_play_data = pd.DataFrame()
     count = 1
-    for game_id in games:
+    game_ids = set(games)  # Convert to a set for random selection
+
+    while game_ids:
+        game_id = random.choice(list(game_ids))  # Randomly select a game ID
         print(f"{count}/{len(games)} Fetching play-by-play data for game ID {game_id}...", flush=True)
         play_by_play_data = graceful_fetch_pbp(game_id)
         if play_by_play_data is None:
             print(f"Skipping game ID {game_id} due to fetch failure.")
             continue
         elif play_by_play_data.empty:
-            print(f"game id {game_id} contains no play-by-play data. This might be a preseason game.", flush=True)
+            print(f"Game ID {game_id} contains no play-by-play data. This might be a preseason game.", flush=True)
             continue
+
         count += 1
         all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
+        game_ids.remove(game_id)  # Remove the successfully processed game ID from the set
 
-    print(f"Completed {count - 1} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
     print(f"Completed {count - 1} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
     return all_play_by_play_data
 
