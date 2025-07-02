@@ -5,6 +5,9 @@ This project analyzes play-by-play data to calculate game durations.
 ## Installation
 
 1. Clone the repository.
+   ```python
+   git clone https://github.com/UFSAL/Game_Duration.git
+   ```
 2. move into the project directory:
    ```bash
    cd pbp_scripts
