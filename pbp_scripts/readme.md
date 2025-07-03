@@ -29,7 +29,7 @@ For a single team's season play-by-play data and saving it to a CSV file, use th
 python season_pbp.py --season 2006-07 --team_name Celtics --save
 ```
 
-The filename `season_pbp.py` is assuming you used `cd pbp_scripts` to change the current working directory to the `pbp_scripts` folder. If you are running the script from a different directory, you will need to provide the full path to the script such as `pbp_scripts/season_pbp.py` instead of just `season_pbp.py`.
+The filename `season_pbp.py` is assuming you used `cd ./Game_Duration/pbp_scripts` to change the current working directory to the `pbp_scripts` folder. If you are running the script from a different directory, you will need to provide the full path to the script such as `./Game_Duration/pbp_scripts/season_pbp.py` instead of just `season_pbp.py`.
 
 To create CSVs for all teams in a season, use the following command:
 
