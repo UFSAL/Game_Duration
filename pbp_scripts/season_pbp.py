@@ -59,9 +59,11 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         play_by_play_data = graceful_fetch_pbp(game_id)
         if play_by_play_data is None:
             print(f"Skipping game ID {game_id} due to fetch failure.")
+            game_ids.remove(game_id)  # Remove the failed game ID
             continue
         elif play_by_play_data.empty:
             print(f"Game ID {game_id} contains no play-by-play data. This might be a preseason game.", flush=True)
+            game_ids.remove(game_id)  # Remove the empty game ID
             continue
 
         count += 1
@@ -69,6 +71,11 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         game_ids.remove(game_id)  # Remove the successfully processed game ID from the set
 
     print(f"Completed {count - 1} / {len(games)} games for team '{team_name}' in season '{season}'.", flush=True)
+
+    if game_ids:
+        print(f"Warning: {len(game_ids)} games were not processed due to fetch failures or empty data.", flush=True)
+        print(f"Unprocessed game IDs: {', '.join(game_ids)}", flush=True)
+
     return all_play_by_play_data
 
 def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
