@@ -10,7 +10,7 @@ This project analyzes play-by-play data to calculate game durations.
    ```
 2. move into the project directory:
    ```bash
-   cd pbp_scripts
+   cd ./Game_Duration/pbp_scripts
    ```
 3. Install dependencies:
    ```bash
