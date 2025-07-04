@@ -23,16 +23,18 @@ This project analyzes play-by-play data to calculate game durations.
 
 ## Usage
 
-For a single team's season play-by-play data and saving it to a CSV file, use the following command:
+To get the play-by-play data for **all** teams in a specified season and save it to CSV files, run the following command:
 
 ```bash
-python season_pbp.py --season 2006-07 --team_name Celtics --save
+python season_pbp.py --season 2006-07
 ```
 
-The filename `season_pbp.py` is assuming you used `cd ./Game_Duration/pbp_scripts` to change the current working directory to the `pbp_scripts` folder. If you are running the script from a different directory, you will need to provide the full path to the script such as `./Game_Duration/pbp_scripts/season_pbp.py` instead of just `season_pbp.py`.
-
-To create CSVs for all teams in a season, use the following command:
+To get the play-by-play data for a **single** team in a specified season and save it to a CSV file, run the following command:
 
 ```bash
-python season_pbp_for_all_teams.py --season 2006-07
+python season_pbp.py --season 2006-07 --team "Celtics"
 ```
+
+Make sure to specify the season in the format `YYYY-YY`, and the team's nickname (not full name) as it appears in the NBA data. Example name that would not work: `Boston Celtics`.
+
+The filename `season_pbp.py` is assuming you used `cd ./Game_Duration/pbp_scripts` to change the current working directory to the `pbp_scripts` folder. If you are running the script from a different directory, you will need to provide the full path to the script such as `./Game_Duration/pbp_scripts/season_pbp.py` instead of just `season_pbp.py`. To find your current working directory, you can run the command `pwd` in your terminal or command prompt.
