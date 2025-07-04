@@ -4,9 +4,27 @@ import random
 import argparse
 import requests
 from requests.exceptions import ReadTimeout
-from nba_api.stats.static import teams
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
+from nba_api.stats.static import teams
+
+def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
+    """
+    Saves the play-by-play data to a CSV file.
+
+    Args:
+        data (pd.DataFrame): The play-by-play data to save.
+        team_name (str): The nickname of the team.
+        season (str): The season in the format 'YYYY-YY'.
+    """
+    if data.empty:
+        print(f"No data available to save for {team_name} in {season}.")
+        return
+
+    file_name = f"{season}_{team_name}_pbp.csv"
+    file_name = f"{season}_{team_name}_pbp.csv"
+    data.to_csv(file_name, index=False)
+    print(f"Play-by-play data saved to {file_name}", flush=True)
 
 def graceful_fetch_pbp(game_id):
     """ Attempts to fetch play-by-play data for a given game ID with retries on timeout."""
@@ -76,39 +94,49 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         print(f"Warning: {len(game_ids)} games were not processed due to fetch failures or empty data.", flush=True)
         print(f"Unprocessed game IDs: {', '.join(game_ids)}", flush=True)
 
+    save_pbp_to_csv(all_play_by_play_data, team_name, season)
+
     return all_play_by_play_data
 
-def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
-    """
-    Saves the play-by-play data to a CSV file.
+def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
+    teams_dict = teams.get_teams()
+    team_names = [team['nickname'] for team in teams_dict] 
+    teams_set = set(team_names)
+    count = 1
+    for team_name in teams_set:
+        print(f"{count}/{len(teams_set)} Processing play-by-play data for {team_name} in season {season}...")
 
-    Args:
-        data (pd.DataFrame): The play-by-play data to save.
-        team_name (str): The nickname of the team.
-        season (str): The season in the format 'YYYY-YY'.
-    """
-    if data.empty:
-        print(f"No data available to save for {team_name} in {season}.")
-        return
+        # Skip data already gathered
+        file_name = f"{season}_{team_name}_pbp.csv"
+        if pd.io.common.file_exists(file_name):
+            print(f"Play-by-play data for {team_name} in {season} already exists. Skipping...")
+            count += 1
+            continue
 
-    file_name = f"{season}_{team_name}_pbp.csv"
-    file_name = f"{season}_{team_name}_pbp.csv"
-    data.to_csv(file_name, index=False)
-    print(f"Play-by-play data saved to {file_name}.")
+        # Random delay between teams to avoid rate limiting
+        time.sleep(random.uniform(10, 20))
+        season_pbp = get_season_pbp(season, team_name)
+        if not season_pbp.empty:
+            print(f"Saving play-by-play data for {team_name} in {season}.")
+            save_pbp_to_csv(season_pbp, team_name, season)
+            count += 1
+        else:
+            print(f"No play-by-play data available for {team_name} in {season}.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Get NBA team's play-by-play data for a season.")
-    parser.add_argument("--season", type=str, help="Season in the format 'YYYY-YY'. Ex: '2006-07'.")
-    parser.add_argument("--team_name", type=str, help="Nickname of the team. Ex: 'Celtics'. Case-sensitive.")
-    parser.add_argument("--save", action="store_true", help="Save the play-by-play data to a CSV file.")
+    parser = argparse.ArgumentParser(description="Get play-by-play data for NBA teams in a given season.")
+
+    # Default behavior gets all teams for the season, but can be overridden by specifying a team name.
+    parser.add_argument("--season", type=str, required=True, help="Season in the format 'YYYY-YY'. Ex: '2006-07'")
+    parser.add_argument("--team_name", type=str, help="Team nickname (e.g. 'Celtics'). If omitted, processes all teams.")
 
     args = parser.parse_args()
 
     try:
-        total_games = get_season_pbp(args.season, args.team_name)
-        if args.save:
-            save_pbp_to_csv(total_games, args.team_name, args.season)
+        if args.team_name:
+            get_season_pbp(args.season, args.team_name) # Process single team
         else:
-            print(total_games)
+            save_all_teams_pbp_for_season(args.season) # Process all teams
     except ValueError as e:
-        print(e)
+        print(f"Error: {e}")
+        exit(1)
