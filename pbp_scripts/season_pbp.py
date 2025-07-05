@@ -367,12 +367,16 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
     if team_id is None:
         team_id = teams.find_teams_by_nickname(team_name)[0]['id']
         if not team_id:
-            raise ValueError(f"Team '{team_name}' not found. Please check the team name and try again.")
+            print(f"Team '{team_name}' not found. Please check the team name and try again.", flush=True)
+            # raise ValueError(f"Team '{team_name}' not found. Please check the team name and try again.")
+            return None
 
     # Gets all games for the given team and season as a pandas Series.
     games_ids = fetch_team_game_ids(season, team_id)
     if games_ids.empty:
-        raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
+        print(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
+        # raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.")
+        return pd.DataFrame()
 
     all_play_by_play_data = collect_games_pbp_data(games_ids, team_name=team_name, season=season)
 
