@@ -227,17 +227,31 @@ def load_checkpoint_data(season: str, team_name: str) -> tuple:
         print(f"No checkpoint data found for {team_name} in season {season}. Starting fresh.", flush=True)
         return pd.DataFrame(), [], []
     
-def fetch_team_game_ids(season: str, team_id: str) -> pd.Series:
+def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = 3, min_delay: int = 2, max_delay: int = 5) -> pd.Series:
     """
-    Fetches all game IDs for a given team and season.
+    Fetches all game IDs for a given team and season, with retry logic for timeouts.
     Args:
         season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
         team_id (str): The ID of the team.
+        max_attempts (int): Maximum number of attempts to fetch data.
+        min_delay (int): Minimum delay between retries in seconds.
+        max_delay (int): Maximum delay between retries in seconds.
     Returns:
         pd.Series: A pandas Series containing all game IDs for the team in the specified season.
     """
-    gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
-    return gamefinder.get_data_frames()[0].GAME_ID
+    for attempt in range(1, max_attempts + 1):
+        try:
+            time.sleep(random.uniform(min_delay, max_delay))
+            gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
+            return gamefinder.get_data_frames()[0].GAME_ID
+        except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
+            print(f"Attempt {attempt}: Timeout or connection error while fetching game IDs for team {team_id} in season {season}.", flush=True)
+            if attempt == max_attempts:
+                print(f"Max attempts reached for team {team_id} in season {season}. Could not fetch game IDs.", flush=True)
+                return pd.Series(dtype=str)
+        except Exception as e:
+            print(f"An unexpected error occurred while fetching game IDs for team {team_id} in season {season}: {e}", flush=True)
+            return pd.Series(dtype=str)
 
 def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
     """
