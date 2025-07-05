@@ -9,10 +9,21 @@ from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
 from nba_api.stats.static import teams
 
-##### CONSTANTS #####
+# Base Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # Directory of the current script file
 DATA_ROOT = os.path.join(SCRIPT_DIR, "..", "pbp_data") # Root directory for play-by-play data.
-#####################
+
+# API Settings
+DEFAULT_TIMEOUT = 30
+MIN_DELAY = 2
+MAX_DELAY = 6
+TEAM_DELAY_MIN = 3
+TEAM_DELAY_MAX = 5
+
+# Retry settings
+MAX_ATTEMPTS = 5
+INITIAL_BACKOFF = 2
+MAX_BACKOFF = 64
 
 def pbp_file_exists(season: str, team_name: str) -> bool:
     """
@@ -66,21 +77,35 @@ def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str) -> None:
     data.to_csv(file_path, index=False)
     print(f"Play-by-play data saved to {file_path}", flush=True)
 
-def fetch_game_pbp(game_id, max_attempts=5):
-    """Attempts to fetch play-by-play data for a given game ID with retries on timeout."""
-    backoff = 2  # Initial backoff time in seconds
+def fetch_game_pbp(game_id, max_attempts=MAX_ATTEMPTS, initial_backoff=INITIAL_BACKOFF,
+                   max_backoff=MAX_BACKOFF, timeout=DEFAULT_TIMEOUT, 
+                   min_delay=MIN_DELAY, max_delay=MAX_DELAY) -> pd.DataFrame:
+    """
+    Attempts to fetch play-by-play data for a given game ID with retries on timeout.
+
+    Parameters:
+        game_id: The game identifier.
+        max_attempts: Maximum number of retry attempts.
+        initial_backoff: Initial backoff time in seconds.
+        max_backoff: Maximum backoff time in seconds.
+        timeout: Timeout for the API call.
+        min_delay: Minimum random delay before each attempt.
+        max_delay: Maximum random delay before each attempt.
+    Returns:
+        pd.DataFrame: The play-by-play data for the game, or None if it could not be fetched.
+    """
+    backoff = initial_backoff
     for attempt in range(1, max_attempts + 1):
         try:
-            # Introduce a random delay to avoid hitting the API too quickly
-            time.sleep(random.uniform(2, 7))
-            return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=60).get_data_frames()[0]
+            time.sleep(random.uniform(min_delay, max_delay)) # Random delay to avoid rate limiting.
+            return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=DEFAULT_TIMEOUT).get_data_frames()[0]
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
             if attempt == max_attempts:
                 print(f"Max attempts reached for game ID {game_id}. Could not fetch data.", flush=True)
                 return None
             print(f"Attempt {attempt}: Timeout or connection error for game ID {game_id}. Retrying with backoff {backoff}s...", flush=True)
             time.sleep(backoff)
-            backoff = min(backoff * 2, 256)
+            backoff = min(backoff * 2, max_backoff)  # Exponential backoff
         except Exception as e:
             print(f"An unexpected error occurred for game ID {game_id}: {e}", flush=True)
             return None
@@ -209,12 +234,12 @@ def get_all_teams_season_pbp(season: str) -> int:
         
         # Check if the play-by-play data file already exists
         if pbp_file_exists(season, team_name):
-            print(f"Skipping. Play-by-play data already exists in season {season} for {team_id}.", flush=True)
+            print(f"Skipping. Play-by-play data already exists in season {season} for {team_name}.", flush=True)
             count += 1
             continue
         
         # Fetch play-by-play data for the team in the specified season
-        time.sleep(random.uniform(10, 20)) # Random delay between teams to avoid rate limiting
+        time.sleep(random.uniform(TEAM_DELAY_MIN, TEAM_DELAY_MAX))
         print(f"{count}/{total_teams} Processing play-by-play data for season {season}, for {team_name}...")
         team_season_pbp = get_team_season_pbp(season, team_name, save_to_file=True, team_id=team_id)
         if not team_season_pbp.empty:
