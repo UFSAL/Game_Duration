@@ -163,11 +163,13 @@ def fetch_game_pbp(game_id, max_attempts=MAX_ATTEMPTS, min_delay=MIN_DELAY, max_
     Returns:
         pd.DataFrame: The play-by-play data for the game, or None if it could not be fetched.
     """
+    from nba_api.stats.endpoints import playbyplayv2 as fresh_playbyplayv2
+
     # backoff = initial_backoff
     for attempt in range(1, max_attempts + 1):
         try:
             time.sleep(random.uniform(min_delay, max_delay)) # Random delay to avoid rate limiting.
-            return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=DEFAULT_TIMEOUT).get_data_frames()[0]
+            return fresh_playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=DEFAULT_TIMEOUT).get_data_frames()[0]
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
             if attempt == max_attempts:
                 print(f"Max attempts reached for game ID {game_id}. Could not fetch data.", flush=True)
@@ -227,7 +229,7 @@ def load_checkpoint_data(season: str, team_name: str) -> tuple:
         print(f"No checkpoint data found for {team_name} in season {season}. Starting fresh.", flush=True)
         return pd.DataFrame(), [], []
     
-def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = 3, min_delay: int = 2, max_delay: int = 5) -> pd.Series:
+def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = MAX_ATTEMPTS, min_delay: int = MIN_DELAY, max_delay: int = MAX_DELAY) -> pd.Series:
     """
     Fetches all game IDs for a given team and season, with retry logic for timeouts.
     Args:
@@ -239,10 +241,12 @@ def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = 3, min_de
     Returns:
         pd.Series: A pandas Series containing all game IDs for the team in the specified season.
     """
+    from nba_api.stats.endpoints import leaguegamefinder as fresh_leaguegamefinder
+
     for attempt in range(1, max_attempts + 1):
         try:
             time.sleep(random.uniform(min_delay, max_delay))
-            gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
+            gamefinder = fresh_leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
             return gamefinder.get_data_frames()[0].GAME_ID
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
             print(f"Attempt {attempt}: Timeout or connection error while fetching game IDs for team {team_id} in season {season}.", flush=True)
@@ -403,9 +407,10 @@ def get_all_teams_season_pbp(season: str):
 
     successful_processed_teams = []
     failed_processed_teams = []
-    count = 1
     teams_to_process = [(row['nickname'], row['id']) for _, row in teams_df.iterrows()]
+
     # Process teams until the list is empty
+    count = 1
     while teams_to_process:
         # Get the next team to process
         team_name, team_id = teams_to_process.pop(0)
