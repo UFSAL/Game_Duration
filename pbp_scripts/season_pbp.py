@@ -3,12 +3,34 @@ import time
 import random
 import argparse
 import requests
+import os
 from requests.exceptions import ReadTimeout
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
 from nba_api.stats.static import teams
 
-def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
+##### CONSTANTS #####
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # Directory of the current script file
+DATA_ROOT = os.path.join(SCRIPT_DIR, "..", "pbp_data") # Root directory for play-by-play data.
+#####################
+
+def get_pbp_filepath(season: str, team_name: str) -> tuple:
+    """
+    Constructs the file path for the play-by-play data CSV file.
+
+    Args:
+        team_name (str): The nickname of the team.
+        season (str): The season in the format 'YYYY-YY'.
+
+    Returns:
+        tuple: A tuple containing the directory and file name.
+    """
+    directory = os.path.join(DATA_ROOT, season)
+    file_name = f"{season}_{team_name}_pbp.csv"
+    file_path = os.path.join(directory, file_name)
+    return directory, file_path
+
+def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str):
     """
     Saves the play-by-play data to a CSV file.
 
@@ -21,10 +43,13 @@ def save_pbp_to_csv(data: pd.DataFrame, team_name: str, season: str):
         print(f"No data available to save for {team_name} in {season}.")
         return
 
-    file_name = f"{season}_{team_name}_pbp.csv"
-    file_name = f"{season}_{team_name}_pbp.csv"
-    data.to_csv(file_name, index=False)
-    print(f"Play-by-play data saved to {file_name}", flush=True)
+    # Creates the directory if it doesn't exist.
+    directory, file_path = get_pbp_filepath(season, team_name)[0]
+    os.makedirs(directory, exist_ok=True)
+
+    # Save the DataFrame to a CSV file.
+    data.to_csv(file_path, index=False)
+    print(f"Play-by-play data saved to {file_path}", flush=True)
 
 def graceful_fetch_pbp(game_id):
     """ Attempts to fetch play-by-play data for a given game ID with retries on timeout."""
@@ -42,17 +67,40 @@ def graceful_fetch_pbp(game_id):
         except Exception as e:
             print(f"An unexpected error occurred for game ID {game_id}: {e}", flush=True)
 
-def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
+def pbp_file_exists(season: str, team_name: str) -> bool:
+    """
+    Checks if the play-by-play CSV file exists for the given season and team.
+
+    Args:
+        season (str): The season in the format 'YYYY-YY'.
+        team_name (str): The nickname of the team.
+
+    Returns:
+        bool: True if the file exists, False otherwise.
+    """
+    _, file_path = get_pbp_filepath(season, team_name)
+    return os.path.exists(file_path)
+
+def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False) -> pd.DataFrame:
     """
     Gets a team's play-by-play data for an entire season.
     
     Args:
         season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
         team_name (str): The nickname of the team. Ex: 'Celtics'. Case-sensitive.
-
+        save_to_file (bool): If True, saves the play-by-play data to a CSV file. Default is False.
     Returns:
         pd.DataFrame: The play-by-play data for the team in the specified season.
     """
+    # Check if the play-by-play data file already exists
+    if pbp_file_exists(season, team_name):
+        _, file_path = get_pbp_filepath(season, team_name)
+        print(f"Play-by-play data already exists in season {season} for {team_name}.", flush=True)
+        try:
+            return pd.read_csv(get_pbp_filepath(season, team_name)[1])
+        except pd.errors.EmptyDataError:
+            print(f"Warning: The file {os.path.normpath(file_path)} is empty.", flush=True)
+            return pd.DataFrame() # Empty dataframe
 
     # Gets the team id of the given team name
     teams_dict = teams.get_teams()
@@ -94,31 +142,35 @@ def get_season_pbp(season: str, team_name: str) -> pd.DataFrame:
         print(f"Warning: {len(game_ids)} games were not processed due to fetch failures or empty data.", flush=True)
         print(f"Unprocessed game IDs: {', '.join(game_ids)}", flush=True)
 
-    save_pbp_to_csv(all_play_by_play_data, team_name, season)
+    if save_to_file:
+        save_pbp_to_csv(all_play_by_play_data, season, team_name)
 
     return all_play_by_play_data
 
-def save_all_teams_pbp_for_season(season: str) -> pd.DataFrame:
+def get_all_teams_season_pbp(season: str, save_files=False):
+    """
+    Gets play-by-play data for all NBA teams in a given season.
+    Args:
+        season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
+        save_files (bool): If True, saves the play-by-play data to CSV files. Default is False.
+    """
     teams_dict = teams.get_teams()
     team_names = [team['nickname'] for team in teams_dict] 
     teams_set = set(team_names)
     count = 1
-    for team_name in teams_set:
-        print(f"{count}/{len(teams_set)} Processing play-by-play data for {team_name} in season {season}...")
 
-        # Skip data already gathered
-        file_name = f"{season}_{team_name}_pbp.csv"
-        if pd.io.common.file_exists(file_name):
-            print(f"Play-by-play data for {team_name} in {season} already exists. Skipping...")
+    for team_name in teams_set:
+        # Check if the play-by-play data file already exists
+        if pbp_file_exists(season, team_name):
+            print(f"Skipping. Play-by-play data already exists in season {season} for {team_name}.", flush=True)
             count += 1
             continue
 
-        # Random delay between teams to avoid rate limiting
-        time.sleep(random.uniform(10, 20))
-        season_pbp = get_season_pbp(season, team_name)
-        if not season_pbp.empty:
-            print(f"Saving play-by-play data for {team_name} in {season}.")
-            save_pbp_to_csv(season_pbp, team_name, season)
+        # Fetch play-by-play data for the team in the specified season
+        time.sleep(random.uniform(10, 20)) # Random delay between teams to avoid rate limiting
+        print(f"{count}/{len(teams_set)} Processing play-by-play data for {team_name} in season {season}...")
+        team_season_pbp = get_team_season_pbp(season, team_name, save_to_file=True)
+        if not team_season_pbp.empty:
             count += 1
         else:
             print(f"No play-by-play data available for {team_name} in {season}.")
@@ -134,9 +186,9 @@ if __name__ == "__main__":
 
     try:
         if args.team_name:
-            get_season_pbp(args.season, args.team_name) # Process single team
+            get_team_season_pbp(args.season, args.team_name, save_to_file=True)
         else:
-            save_all_teams_pbp_for_season(args.season) # Process all teams
+            get_all_teams_season_pbp(args.season, save_files=True)
     except ValueError as e:
         print(f"Error: {e}")
         exit(1)
