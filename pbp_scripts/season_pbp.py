@@ -222,7 +222,7 @@ def get_all_teams_season_pbp(season: str) -> int:
     teams_info = teams.get_teams()
     teams_df = pd.DataFrame(teams_info)
     total_teams = teams_df.shape[0]
-    teams_df.sample(frac=1).reset_index(drop=True, inplace=True)  # Shuffle the teams.
+    teams_df = teams_df.sample(frac=1).reset_index(drop=True)  # Shuffle the teams.
 
     # Example: Iterate over the teams DataFrame rows (not strictly necessary, but shown for clarity)
     successful_processed_teams = []
