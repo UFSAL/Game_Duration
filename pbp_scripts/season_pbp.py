@@ -24,7 +24,7 @@ TEAM_DELAY_MIN = 3
 TEAM_DELAY_MAX = 5
 
 # Retry settings
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 2
 
 # State for session
 CURRENT_PBP_DATA = pd.DataFrame()  
@@ -126,10 +126,16 @@ def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str) -> None:
     data.to_csv(file_path, index=False)
     print(f"Play-by-play data saved to {os.path.normpath(file_path)}", flush=True)
 
-def save_checkpoint(current_play_by_play_data: pd.DataFrame, season: str, team_name: str, failed_games: list = [], empty_games: list = []) -> None:
+def save_checkpoint(current_play_by_play_data: pd.DataFrame, season: str, team_name: str, failed_games: list = None, empty_games: list = None) -> None:
     """
     Saves the currently processed game IDs and failed games to a file for later resumption.
     """
+    # Initialize mutable arguments to avoid shared state across calls.
+    if failed_games is None:
+        failed_games = []
+    if empty_games is None:
+        empty_games = []
+        
     # Creates the directory if it doesn't exist.
     directory, file_path = get_checkpoint_filepath(season, team_name)
     os.makedirs(directory, exist_ok=True)
@@ -243,13 +249,13 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
     Returns:
         pd.DataFrame: A DataFrame containing the collected play-by-play data for all games.
     """
-    global CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_FAILED_GAMES
+    global CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_FAILED_GAMES, CURRENT_EMPTY_GAMES
 
     # Set the state
     CURRENT_SEASON = season
     CURRENT_TEAM_NAME = team_name
 
-    # Load checkpoint if it exists.
+    # Preserve the state of failed_games and empty_games loaded from the checkpoint.
     checkpoint_data, failed_games, empty_games = load_checkpoint_data(season, team_name)
 
     # Tracking
@@ -277,6 +283,7 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
     # Update state
     CURRENT_PBP_DATA = all_play_by_play_data
     CURRENT_FAILED_GAMES = failed_games
+    CURRENT_EMPTY_GAMES = empty_games
 
     # Loop through each game ID and fetch the play-by-play data.
     for count, game_id in enumerate(game_ids, start=(len(successful_games) + len(empty_games) + 1)):
@@ -291,12 +298,19 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
             return None
         elif play_by_play_data.empty:
             empty_games.append(game_id)
-            CURRENT_PBP_DATA = all_play_by_play_data
+            CURRENT_EMPTY_GAMES = empty_games
             print(f"No data found for game ID {game_id}. This might be a preseason game.", flush=True)
         else:
-            successful_games.append(game_id)
+            # Game processed successfully.
             all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
-            CURRENT_PBP_DATA = all_play_by_play_data
+            successful_games.append(game_id)
+
+        # Periodic checkpoint 
+        if count % 10 == 0:
+            print(f"Checkpointing after processing {count} games...", flush=True)
+            save_checkpoint(all_play_by_play_data, season, team_name, failed_games, empty_games)
+
+        CURRENT_PBP_DATA = all_play_by_play_data
 
     print(f"Completed {len(successful_games)} / {total_games} games for team '{team_name}' in season '{season}'.", flush=True)
 
@@ -313,6 +327,9 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
         print("Empty game IDs:", flush=True)
         for game_id in empty_games:
             print(game_id, flush=True)
+
+    # Save the current state to a checkpoint file.
+    save_checkpoint(all_play_by_play_data, season, team_name, failed_games, empty_games)
     
     return all_play_by_play_data
 
@@ -345,11 +362,11 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
 
     all_play_by_play_data = collect_games_pbp_data(games_ids, team_name=team_name, season=season)
 
-    if all_play_by_play_data is None:
-        print(f"Data incomplete for team '{team_name}' in season '{season}'.", flush=True)
+    if CURRENT_FAILED_GAMES:
+        print(f"Data incomplete for team '{team_name}' in season '{season}'. {len(CURRENT_FAILED_GAMES)} failed games.", flush=True)
         return None
 
-    if save_to_file:
+    if save_to_file and not all_play_by_play_data.empty:
         save_pbp_to_csv(all_play_by_play_data, season, team_name)
 
     return all_play_by_play_data
@@ -374,6 +391,13 @@ def get_all_teams_season_pbp(season: str):
     while teams_to_process:
         # Get the next team to process
         team_name, team_id = teams_to_process.pop(0)
+
+        # Reset the global state for the current team
+        CURRENT_PBP_DATA = pd.DataFrame()
+        CURRENT_SEASON = season
+        CURRENT_TEAM_NAME = team_name
+        CURRENT_FAILED_GAMES = []
+        CURRENT_EMPTY_GAMES = []
         
         # Check if the play-by-play data file already exists
         if completed_pbp_file_exists(season, team_name):
