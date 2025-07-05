@@ -109,47 +109,47 @@ def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
     
 def fetch_team_game_ids(season: str, team_id: str) -> pd.Series:
     """
-    Fetches all games for a given team in a specified season.
-
+    Fetches all game IDs for a given team and season.
     Args:
-        season (str): The season in the format 'YYYY-YY'.
+        season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
         team_id (str): The ID of the team.
-
     Returns:
-        pd.Series: A pandas Series containing game IDs for the specified team and season.
+        pd.Series: A pandas Series containing all game IDs for the team in the specified season.
     """
     gamefinder = leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
     return gamefinder.get_data_frames()[0].GAME_ID
 
-def collect_games_pbp_data(games: pd.Series, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
-    game_ids = set(games) # Convert to a set for fast random selection
-    total_games = games.shape[0]
+def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
+    """Collects play-by-play data for a list of game IDs."""
 
-    # Initialize an empty DataFrame to store all play-by-play data
+    game_ids = game_ids.sample(frac=1).reset_index(drop=True) # Shuffle the order.
+    total_games = game_ids.shape[0] # Total number of games to process.
+
+    # Tracking
+    successful_games = []
+    failed_games = []
     all_play_by_play_data = pd.DataFrame()
-    count = 1
-    while game_ids:
-        game_id = random.choice(list(game_ids))  # Randomly select a game ID
+
+    # Loop through each game ID and fetch the play-by-play data.
+    for count, game_id in enumerate(game_ids, start=1):
         print(f"{count}/{total_games} Fetching play-by-play data for game ID {game_id}...", flush=True)
         play_by_play_data = fetch_game_pbp(game_id)
-        if play_by_play_data is None:
-            print(f"Skipping game ID {game_id} due to fetch failure.")
-            game_ids.remove(game_id)  # Remove the failed game ID
-            continue
-        elif play_by_play_data.empty:
-            print(f"Game ID {game_id} contains no play-by-play data. This might be a preseason game.", flush=True)
-            game_ids.remove(game_id)  # Remove the empty game ID
+        if play_by_play_data is None or play_by_play_data.empty:
+            failed_games.append(game_id)
+            print(f"Skipping game ID {game_id} due to fetch failure or empty data.", flush=True)
             continue
 
-        count += 1
+        successful_games.append(game_id)
         all_play_by_play_data = pd.concat([all_play_by_play_data, play_by_play_data], ignore_index=True)
-        game_ids.remove(game_id)  # Remove the successfully processed game ID from the set
 
-    print(f"Completed {count - 1} / {total_games} games for team '{team_name}' in season '{season}'.", flush=True)
+    print(f"Completed {len(successful_games)} / {total_games} games for team '{team_name}' in season '{season}'.", flush=True)
 
-    if game_ids:
-        print(f"Warning: {len(game_ids)} games were not processed due to fetch failures or empty data.", flush=True)
-        print(f"Unprocessed game IDs: {', '.join(game_ids)}", flush=True)
+    # If there are any failed games, print their IDs.
+    if failed_games:
+        print(f"Warning: {len(failed_games)} games failed to process.", flush=True)
+        print("Failed game IDs:", flush=True)
+        for game_id in failed_games:
+            print(game_id, flush=True)
     
     return all_play_by_play_data
 
@@ -176,11 +176,11 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
             raise ValueError(f"Team '{team_name}' not found. Please check the team name and try again.")
 
     # Gets all games for the given team and season as a pandas Series.
-    games = fetch_team_game_ids(season, team_id)
-    if games.empty:
+    games_ids = fetch_team_game_ids(season, team_id)
+    if games_ids.empty:
         raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
 
-    all_play_by_play_data = collect_games_pbp_data(games)
+    all_play_by_play_data = collect_games_pbp_data(games_ids)
 
     if save_to_file:
         save_pbp_to_csv(all_play_by_play_data, season, team_name)
@@ -194,28 +194,43 @@ def get_all_teams_season_pbp(season: str) -> int:
         season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
         save_files (bool): If True, saves the play-by-play data to CSV files. Default is False.
     """
-    teams_dict = teams.get_teams()
-    teams_set = set((team['nickname'], team['id']) for team in teams_dict)
+    teams_info = teams.get_teams()
+    teams_df = pd.DataFrame(teams_info)
+    total_teams = teams_df.shape[0]
+    teams_df.sample(frac=1).reset_index(drop=True, inplace=True)  # Shuffle the teams.
 
+    # Example: Iterate over the teams DataFrame rows (not strictly necessary, but shown for clarity)
+    successful_processed_teams = []
+    failed_processed_teams = []
     count = 1
-    for name, id in teams_set:
+    for index, row in teams_df.iterrows():
+        team_name = row['nickname']
+        team_id = row['id']
+        
         # Check if the play-by-play data file already exists
-        if pbp_file_exists(season, name):
-            print(f"Skipping. Play-by-play data already exists in season {season} for {id}.", flush=True)
+        if pbp_file_exists(season, team_name):
+            print(f"Skipping. Play-by-play data already exists in season {season} for {team_id}.", flush=True)
             count += 1
             continue
-
+        
         # Fetch play-by-play data for the team in the specified season
         time.sleep(random.uniform(10, 20)) # Random delay between teams to avoid rate limiting
-        print(f"{count}/{len(teams_set)} Processing play-by-play data for season {season}, for {name}...")
-        team_season_pbp = get_team_season_pbp(season, name, save_to_file=True, team_id=id)
+        print(f"{count}/{total_teams} Processing play-by-play data for season {season}, for {team_name}...")
+        team_season_pbp = get_team_season_pbp(season, team_name, save_to_file=True, team_id=team_id)
         if not team_season_pbp.empty:
             count += 1
+            successful_processed_teams.append((team_name, team_id))
         else:
-            print(f"No play-by-play data available for {name} in {season}.")
-    
-    print(f"Completed processing {count - 1} teams for season {season}.", flush=True)
-    return count - 1
+            failed_processed_teams.append((team_name, team_id))
+            print(f"No play-by-play data available for {team_name} in {season}.", flush=True)
+
+    # Summary of processing results
+    print(f"\nProcessing complete for all teams in season {season}.", flush=True)
+    print(f"Successfully processed: {len(successful_processed_teams)} / {total_teams}", flush=True)
+    if failed_processed_teams:
+        print("Failed to process the following teams:")
+        for team_name, team_id in failed_processed_teams:
+            print(f"Team: {team_name}, ID: {team_id}", flush=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get play-by-play data for NBA teams in a given season.")
