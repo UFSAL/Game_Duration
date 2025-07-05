@@ -44,7 +44,7 @@ def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str):
         return
 
     # Creates the directory if it doesn't exist.
-    directory, file_path = get_pbp_filepath(season, team_name)[0]
+    directory, file_path = get_pbp_filepath(season, team_name)
     os.makedirs(directory, exist_ok=True)
 
     # Save the DataFrame to a CSV file.
@@ -147,7 +147,7 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False)
 
     return all_play_by_play_data
 
-def get_all_teams_season_pbp(season: str, save_files=False):
+def get_all_teams_season_pbp(season: str):
     """
     Gets play-by-play data for all NBA teams in a given season.
     Args:
@@ -188,7 +188,7 @@ if __name__ == "__main__":
         if args.team_name:
             get_team_season_pbp(args.season, args.team_name, save_to_file=True)
         else:
-            get_all_teams_season_pbp(args.season, save_files=True)
+            get_all_teams_season_pbp(args.season)
     except ValueError as e:
         print(f"Error: {e}")
         exit(1)
