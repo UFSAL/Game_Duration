@@ -205,7 +205,7 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
     if games_ids.empty:
         raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
 
-    all_play_by_play_data = collect_games_pbp_data(games_ids)
+    all_play_by_play_data = collect_games_pbp_data(games_ids, team_name=team_name, season=season)
 
     if save_to_file:
         save_pbp_to_csv(all_play_by_play_data, season, team_name)
