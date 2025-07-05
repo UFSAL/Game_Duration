@@ -66,21 +66,24 @@ def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str) -> None:
     data.to_csv(file_path, index=False)
     print(f"Play-by-play data saved to {file_path}", flush=True)
 
-def graceful_fetch_pbp(game_id):
+def fetch_game_pbp(game_id, max_attempts=5):
     """Attempts to fetch play-by-play data for a given game ID with retries on timeout."""
     backoff = 2  # Initial backoff time in seconds
-    attempt = 0
-    while True:
-        time.sleep(random.uniform(2, 7))
+    for attempt in range(1, max_attempts + 1):
         try:
+            # Introduce a random delay to avoid hitting the API too quickly
+            time.sleep(random.uniform(2, 7))
             return playbyplayv2.PlayByPlayV2(game_id=game_id, timeout=60).get_data_frames()[0]
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
-            attempt += 1
+            if attempt == max_attempts:
+                print(f"Max attempts reached for game ID {game_id}. Could not fetch data.", flush=True)
+                return None
             print(f"Attempt {attempt}: Timeout or connection error for game ID {game_id}. Retrying with backoff {backoff}s...", flush=True)
-            time.sleep(backoff)  # Exponential backoff
-            backoff = min(backoff * 2, 256)  # Double the backoff time for the next attempt
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 256)
         except Exception as e:
             print(f"An unexpected error occurred for game ID {game_id}: {e}", flush=True)
+            return None
 
 def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
     """
@@ -128,7 +131,7 @@ def collect_games_pbp_data(games: pd.Series, team_name: str = "Unknown", season:
     while game_ids:
         game_id = random.choice(list(game_ids))  # Randomly select a game ID
         print(f"{count}/{total_games} Fetching play-by-play data for game ID {game_id}...", flush=True)
-        play_by_play_data = graceful_fetch_pbp(game_id)
+        play_by_play_data = fetch_game_pbp(game_id)
         if play_by_play_data is None:
             print(f"Skipping game ID {game_id} due to fetch failure.")
             game_ids.remove(game_id)  # Remove the failed game ID
