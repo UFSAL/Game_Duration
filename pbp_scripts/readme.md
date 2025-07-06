@@ -32,7 +32,7 @@ python season_pbp.py --season 2006-07
 To get the play-by-play data for a **single** team in a specified season and save it to a CSV file, run the following command:
 
 ```bash
-python season_pbp.py --season 2006-07 --team "Celtics"
+python season_pbp.py --season 2006-07 --team Celtics
 ```
 
 Make sure to specify the season in the format `YYYY-YY`, and the team's nickname (not full name) as it appears in the NBA data. Example name that would not work: `Boston Celtics`.
