@@ -44,6 +44,65 @@ def signal_handler(sig, frame):
     print("Exiting program.", flush=True)
     exit(0)
 
+def reset_connections():
+    """Force close and reset all connection pools and TCP sockets"""
+    print("🔄 Forcefully resetting all connection pools and sockets...", flush=True)
+
+    try:
+        # Reset the underlying requests connection pools
+        import requests
+        for session in [requests.Session(), requests.sessions.Session()]:
+            for adapter in session.adapters.values():
+                adapter.close()
+        
+        # Reset the underlying urllib3 connection pools that requests uses
+        import urllib3
+        urllib3.disable_warnings()
+        try:
+            pool_manager = urllib3.PoolManager()
+            pool_manager.clear()
+            for conn in pool_manager.pools.values():
+                conn.close()
+        except:
+            pass
+            
+        # Force garbage collection to release any lingering connections
+        import gc
+        gc.collect()
+        
+        print("✅ Connection pools reset successfully", flush=True)
+        return True
+    except Exception as e:
+        print(f"⚠️ Error resetting connections: {e}", flush=True)
+        return False
+    
+def restart_script():
+    """Restart the script in a new process with the same arguments"""
+    import sys
+    import os
+    import subprocess
+    
+    print("🔄 Restarting script in a new process...", flush=True)
+    
+    # Get the current script path and arguments
+    script_path = os.path.abspath(__file__)
+    args = sys.argv[1:]
+    
+    # Convert arguments to a string
+    args_str = " ".join(args)
+    
+    # Create a new process
+    try:
+        # Using subprocess.Popen to start without waiting
+        print(f"Executing: python \"{script_path}\" {args_str}", flush=True)
+        subprocess.Popen(f"python \"{script_path}\" {args_str}", shell=True)
+        print("New process started successfully. Exiting current process.", flush=True)
+        # Exit the current process
+        sys.exit(0)
+    except Exception as e:
+        print(f"Failed to restart script: {e}", flush=True)
+        return False
+
 def completed_pbp_file_exists(season: str, team_name: str) -> bool:
     """
     Checks if the play-by-play (PBP) data file exists for a given season and team.
@@ -252,10 +311,10 @@ def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = MAX_ATTEM
             print(f"Attempt {attempt}: Timeout or connection error while fetching game IDs for team {team_id} in season {season}.", flush=True)
             if attempt == max_attempts:
                 print(f"Max attempts reached for team {team_id} in season {season}. Could not fetch game IDs.", flush=True)
-                return pd.Series(dtype=str)
+                return None
         except Exception as e:
             print(f"An unexpected error occurred while fetching game IDs for team {team_id} in season {season}: {e}", flush=True)
-            return pd.Series(dtype=str)
+            return None
 
 def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
     """
@@ -377,8 +436,12 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
 
     # Gets all games for the given team and season as a pandas Series.
     games_ids = fetch_team_game_ids(season, team_id)
+
+    if games_ids is None:
+        return None
+
     if games_ids.empty:
-        print(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.", flush=True)
+        print(f"No games found for team '{team_name}' in season '{season}'. This team may not have existed yet.", flush=True)
         # raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.")
         return pd.DataFrame()
 
@@ -410,10 +473,63 @@ def get_all_teams_season_pbp(season: str):
     teams_to_process = [(row['nickname'], row['id']) for _, row in teams_df.iterrows()]
 
     # Process teams until the list is empty
+    consecutive_failures = 0
+    max_consecutive_failures = 1
+
+    state_file = os.path.join(CHECKPOINTS_ROOT, f"{season}_state.pickle")
+
+    # Check if we have a saved state to load
+    if os.path.exists(state_file):
+        print(f"Loading saved state from {os.path.normpath(state_file)}...", flush=True)
+        try:
+            with open(state_file, "rb") as f:
+                state = pickle.load(f)
+                teams_to_process = state.get("teams_to_process", teams_to_process)
+                successful_processed_teams = state.get("successful", [])
+                failed_processed_teams = state.get("failed", [])
+                count = state.get("count", 1)
+                print(f"Loaded saved state with {len(teams_to_process)} teams remaining", flush=True)
+                
+                # Try to remove the state file but don't fail if we can't
+                try:
+                    os.remove(state_file)
+                    print(f"Removed state file {os.path.normpath(state_file)}", flush=True)
+                except Exception as remove_error:
+                    print(f"Note: Could not remove state file now: {remove_error}. Will continue anyway.", flush=True)
+
+                
+                consecutive_failures = 0
+                total_teams = len(teams_to_process) + len(successful_processed_teams) + len(failed_processed_teams)
+        except (FileNotFoundError, pickle.UnpicklingError, PermissionError) as e:
+                print(f"Could not access state file, retrying in 2s: {e}", flush=True)
+                time.sleep(2)  # Wait before retrying
+
     count = 1
     while teams_to_process:
         # Get the next team to process
         team_name, team_id = teams_to_process.pop(0)
+
+        # Check if too many consecutive failures
+        if consecutive_failures >= max_consecutive_failures:
+            print(f"⚠️ Detected {consecutive_failures} consecutive API failures", flush=True)
+            print("API appears to be rate limiting. Saving state and restarting...", flush=True)
+            
+            # Save state before restarting
+            with open(state_file, "wb") as f:
+                pickle.dump({
+                    "teams_to_process": teams_to_process,
+                    "successful": successful_processed_teams,
+                    "failed": failed_processed_teams,
+                    "count": count
+                }, f)
+
+            # Take a LONG break (similar to the time it takes to restart the script)
+            cooldown_time = 10
+            print(f"Taking a {cooldown_time}s cooldown break...", flush=True)
+            time.sleep(cooldown_time)
+            
+            # Perform a script restart
+            restart_script()
 
         # Reset the global state for the current team
         CURRENT_PBP_DATA = pd.DataFrame()
@@ -437,8 +553,11 @@ def get_all_teams_season_pbp(season: str):
             # Data gathering was incomplete - add back to the end of the queue
             print(f"Data incomplete for {team_name}. Will retry later.", flush=True)
             teams_to_process.append((team_name, team_id))
+            consecutive_failures += 1
         elif not team_season_pbp.empty:
             count += 1
+            consecutive_failures = 0
+            print(f"Successfully processed {team_name} in season {season}.", flush=True)
             successful_processed_teams.append((team_name, team_id))
             # Checkpoints are useless after successful processing, so we can delete them.
             if checkpoint_file_exists(season, team_name):
