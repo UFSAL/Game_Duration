@@ -465,12 +465,13 @@ def get_all_teams_season_pbp(season: str):
     """
     teams_info = teams.get_teams()
     teams_df = pd.DataFrame(teams_info)
-    total_teams = teams_df.shape[0]
     teams_df = teams_df.sample(frac=1).reset_index(drop=True)  # Shuffle the teams.
 
     successful_processed_teams = []
     failed_processed_teams = []
-    teams_to_process = [(row['nickname'], row['id']) for _, row in teams_df.iterrows()]
+    all_team_keys = set((row['nickname'], row['id']) for _, row in teams_df.iterrows())
+    total_teams = len(all_team_keys)
+    teams_to_process = list(all_team_keys)
 
     # Process teams until the list is empty
     consecutive_failures = 0
@@ -544,7 +545,8 @@ def get_all_teams_season_pbp(season: str):
         if team_season_pbp is None:
             # Data gathering was incomplete - add back to the end of the queue
             print(f"Data incomplete for {team_name}. Will retry later.", flush=True)
-            teams_to_process.append((team_name, team_id))
+            if (team_name, team_id) not in teams_to_process:
+                teams_to_process.append((team_name, team_id))
             consecutive_failures += 1
         elif not team_season_pbp.empty:
             count += 1
@@ -585,7 +587,10 @@ if __name__ == "__main__":
             get_team_season_pbp(args.season, args.team, save_to_file=True)
         else:
             get_all_teams_season_pbp(args.season)
-            os.remove(os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle"))
+            # Clean up state file if it exists
+            filepath = os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle")
+            if os.path.exists(filepath):
+                os.remove(filepath)
     except ValueError as e:
         print(f"Error: {e}")
         exit(1)
