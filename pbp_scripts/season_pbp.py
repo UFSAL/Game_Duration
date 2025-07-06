@@ -490,14 +490,6 @@ def get_all_teams_season_pbp(season: str):
                 count = state.get("count", 1)
                 print(f"Loaded saved state with {len(teams_to_process)} teams remaining", flush=True)
                 
-                # Try to remove the state file but don't fail if we can't
-                try:
-                    os.remove(state_file)
-                    print(f"Removed state file {os.path.normpath(state_file)}", flush=True)
-                except Exception as remove_error:
-                    print(f"Note: Could not remove state file now: {remove_error}. Will continue anyway.", flush=True)
-
-                
                 consecutive_failures = 0
                 total_teams = len(teams_to_process) + len(successful_processed_teams) + len(failed_processed_teams)
         except (FileNotFoundError, pickle.UnpicklingError, PermissionError) as e:
@@ -593,6 +585,7 @@ if __name__ == "__main__":
             get_team_season_pbp(args.season, args.team, save_to_file=True)
         else:
             get_all_teams_season_pbp(args.season)
+            os.remove(os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle"))
     except ValueError as e:
         print(f"Error: {e}")
         exit(1)
