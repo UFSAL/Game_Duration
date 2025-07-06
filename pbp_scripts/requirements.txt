@@ -1,2 +1,4 @@
 nba_api==1.10.0
 pandas==2.3.0
+Requests==2.32.4
+urllib3==2.5.0
