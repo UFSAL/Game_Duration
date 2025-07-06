@@ -535,6 +535,7 @@ def get_all_teams_season_pbp(season: str):
         if completed_pbp_file_exists(season, team_name):
             print(f"Skipping. Play-by-play data already exists in season {season} for {team_name}.", flush=True)
             count += 1
+            successful_processed_teams.append(team_name)
             continue
         
         # Fetch play-by-play data for the team
