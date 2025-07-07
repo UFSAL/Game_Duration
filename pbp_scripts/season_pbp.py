@@ -580,12 +580,15 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    state_path = os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle")
+
     try:
         if args.team:
             get_team_season_pbp(args.season, args.team, save_to_file=True)
         else:
             get_all_teams_season_pbp(args.season)
-            os.remove(os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle"))
+            if os.path.exists(state_path):
+                os.remove(state_path)
     except ValueError as e:
-        print(f"Error: {e}")
+        print(f"Error: {e}", flush=True)
         exit(1)
