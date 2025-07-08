@@ -6,6 +6,8 @@ import requests
 import os
 import pickle
 import signal
+import sys
+import subprocess
 from requests.exceptions import ReadTimeout
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
@@ -78,17 +80,9 @@ def reset_connections():
     
 def restart_script():
     """Restart the script in a new process with the same arguments"""
-    import sys
-    import os
-    import subprocess
-    
     print("🔄 Restarting script in a new process...", flush=True)
-    
-    # Get the current script path and arguments
     script_path = os.path.abspath(__file__)
     args = sys.argv[1:]
-    
-    # Convert arguments to a string
     args_str = " ".join(args)
     
     # Create a new process
