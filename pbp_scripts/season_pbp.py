@@ -505,7 +505,10 @@ def get_all_teams_season_pbp(season: str):
         if consecutive_failures >= max_consecutive_failures:
             print(f"⚠️ Detected {consecutive_failures} consecutive API failures", flush=True)
             print("API appears to be rate limiting. Saving state and restarting...", flush=True)
-            
+
+            # Re-add the popped team
+            teams_to_process.insert(0, (team_name, team_id))
+
             # Save state before restarting
             with open(state_file, "wb") as f:
                 pickle.dump({
