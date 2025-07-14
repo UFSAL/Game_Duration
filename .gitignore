@@ -199,3 +199,6 @@ cython_debug/
 # pickle files
 *.pkl
 *.pickle
+.DS_Store
+nba_pbp_data.zip
+pbp_scripts/combine_all_pbp_csv_files.R
