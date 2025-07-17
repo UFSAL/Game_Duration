@@ -230,3 +230,20 @@ nba_pbp_all <- nba_pbp_all %>%
 saveRDS(nba_pbp_all, "nba_pbp_data/nba_pbp_cleaned.rds")
 # Save the final cleaned data frame to a .csv file
 write_csv(nba_pbp_all, "nba_pbp_data/nba_pbp_cleaned.csv")
+
+# Regular season games are identified by 002 in the first 3 characters of GAME_ID
+# Find out hoow many regular season games there are in nbp_pbp_corrected
+nba_pbp_corrected_reg <- nba_pbp_corrected %>%
+  filter(str_starts(GAME_ID, "002"))
+# Find out how many regular season games there are where game_duration_corrected is not NA
+nba_pbp_corrected_valid <- nba_pbp_corrected_reg %>%
+  filter(!is.na(game_duration_corrected))
+
+# Calculate the percentage of regular season games
+reg_season_games_pct <- nrow(nba_pbp_corrected_valid) /
+  nrow(nba_pbp_corrected_reg)
+print(paste(
+  "Percentage of regular season games in corrected data:",
+  round(reg_season_games_pct * 100, 2),
+  "%"
+))
