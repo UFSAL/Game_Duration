@@ -202,3 +202,9 @@ cython_debug/
 .DS_Store
 nba_pbp_data.zip
 pbp_scripts/combine_all_pbp_csv_files.R
+
+# RDS files
+*.rds
+
+# Zip files
+*.zip
