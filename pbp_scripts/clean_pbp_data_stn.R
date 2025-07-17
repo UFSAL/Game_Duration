@@ -168,7 +168,7 @@ calculate_duration_improved <- function(start_str, end_str) {
   duration_mins <- as.numeric(difftime(end_time, start_time, units = "mins"))
 
   # Filter out unrealistic durations (less than 1 hour or more than 6 hours)
-  if (!is.na(duration_mins) && (duration_mins < 60 || duration_mins > 360)) {
+  if (!is.na(duration_mins) && (duration_mins < 60 || duration_mins > 220)) {
     return(NA)
   }
 
