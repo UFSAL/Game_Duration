@@ -210,3 +210,23 @@ summary_stats <- nba_pbp_corrected %>%
 
 print("Improved duration summary:")
 print(summary_stats)
+
+# Join the corrected durations back to the main dataset
+nba_pbp_all <- nba_pbp_all %>%
+  left_join(
+    nba_pbp_corrected %>% select(GAME_ID, game_duration_corrected),
+    by = "GAME_ID"
+  ) %>%
+  mutate(
+    game_duration = ifelse(
+      is.na(game_duration_corrected),
+      game_duration,
+      game_duration_corrected
+    )
+  ) %>%
+  select(-game_duration_corrected)
+
+# Save the final cleaned data frame to an RDS file
+saveRDS(nba_pbp_all, "nba_pbp_data/nba_pbp_cleaned.rds")
+# Save the final cleaned data frame to a .csv file
+write_csv(nba_pbp_all, "nba_pbp_data/nba_pbp_cleaned.csv")
