@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 import time
 import random
@@ -6,8 +7,6 @@ import requests
 import os
 import pickle
 import signal
-import sys
-import subprocess
 from requests.exceptions import ReadTimeout
 from nba_api.stats.endpoints import leaguegamefinder
 from nba_api.stats.endpoints import playbyplayv2
@@ -34,12 +33,20 @@ CURRENT_SEASON = ""
 CURRENT_TEAM_NAME = ""
 CURRENT_FAILED_GAMES = []
 CURRENT_EMPTY_GAMES = []
+CURRENT_LEAGUE = ""
+LEAGUE_IDS = {
+    "nba": "00",
+    "wnba": "10",
+    "aba": "01",
+    "summer_league": "15",
+    "g_league": "20"
+}
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C by saving checkpoint before exiting."""
     print("\nCtrl+C detected! Saving checkpoint before exiting...", flush=True)
     if not CURRENT_PBP_DATA.empty and CURRENT_SEASON and CURRENT_TEAM_NAME:
-        save_checkpoint(CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_FAILED_GAMES, CURRENT_EMPTY_GAMES)
+        save_checkpoint(CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_LEAGUE, CURRENT_FAILED_GAMES, CURRENT_EMPTY_GAMES)
         print(f"Checkpoint saved for {CURRENT_TEAM_NAME} in season {CURRENT_SEASON}.", flush=True)
     else:
         print("No data to save in checkpoint.", flush=True)
@@ -80,9 +87,17 @@ def reset_connections():
     
 def restart_script():
     """Restart the script in a new process with the same arguments"""
+    import sys
+    import os
+    import subprocess
+    
     print("🔄 Restarting script in a new process...", flush=True)
+    
+    # Get the current script path and arguments
     script_path = os.path.abspath(__file__)
     args = sys.argv[1:]
+    
+    # Convert arguments to a string
     args_str = " ".join(args)
     
     # Create a new process
@@ -97,7 +112,7 @@ def restart_script():
         print(f"Failed to restart script: {e}", flush=True)
         return False
 
-def completed_pbp_file_exists(season: str, team_name: str) -> bool:
+def completed_pbp_file_exists(season: str, team_name: str, league: str) -> bool:
     """
     Checks if the play-by-play (PBP) data file exists for a given season and team.
 
@@ -108,10 +123,10 @@ def completed_pbp_file_exists(season: str, team_name: str) -> bool:
     Returns:
         bool: True if the PBP data file exists, False otherwise.
     """
-    _, file_path = get_completed_pbp_data_filepath(season, team_name)
+    _, file_path = get_completed_pbp_data_filepath(season, team_name, league)
     return os.path.exists(file_path)
 
-def checkpoint_file_exists(season: str, team_name: str) -> bool:
+def checkpoint_file_exists(season: str, team_name: str, league: str) -> bool:
     """
     Checks if the progress checkpoint file exists for a given season and team.
 
@@ -122,10 +137,10 @@ def checkpoint_file_exists(season: str, team_name: str) -> bool:
     Returns:
         bool: True if the checkpoint file exists, False otherwise.
     """
-    _, file_path = get_checkpoint_filepath(season, team_name)
+    _, file_path = get_checkpoint_filepath(season, team_name, league)
     return os.path.exists(file_path)
 
-def get_completed_pbp_data_filepath(season: str, team_name: str) -> tuple:
+def get_completed_pbp_data_filepath(season: str, team_name: str, league: str) -> tuple:
     """
     Constructs the file path for the play-by-play data CSV file.
 
@@ -136,12 +151,12 @@ def get_completed_pbp_data_filepath(season: str, team_name: str) -> tuple:
     Returns:
         tuple: A tuple containing the directory and file path.
     """
-    directory = os.path.join(DATA_ROOT, season)
-    file_name = f"{season}_{team_name}_pbp.csv"
+    directory = os.path.join(DATA_ROOT, league, season)
+    file_name = f"{league}_{season}_{team_name}_pbp.csv"
     file_path = os.path.join(directory, file_name)
     return directory, file_path
 
-def get_checkpoint_filepath(season: str, team_name: str) -> tuple:
+def get_checkpoint_filepath(season: str, team_name: str, league: str) -> tuple:
     """
     Constructs the file path for the progress checkpoint file.
 
@@ -152,12 +167,12 @@ def get_checkpoint_filepath(season: str, team_name: str) -> tuple:
     Returns:
         tuple: A tuple containing the directory and file name.
     """
-    directory = os.path.join(CHECKPOINTS_ROOT, season)
-    file_name = f"{season}_{team_name}_pbp_checkpoint.pickle"
+    directory = os.path.join(CHECKPOINTS_ROOT, league, season)
+    file_name = f"{league}_{season}_{team_name}_pbp_checkpoint.pickle"
     file_path = os.path.join(directory, file_name)
     return directory, file_path
 
-def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str) -> None:
+def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str, league: str) -> None:
     """
     Saves the play-by-play data to a CSV file.
 
@@ -172,14 +187,14 @@ def save_pbp_to_csv(data: pd.DataFrame, season: str, team_name: str) -> None:
         return
 
     # Creates the directory if it doesn't exist.
-    directory, file_path = get_completed_pbp_data_filepath(season, team_name)
+    directory, file_path = get_completed_pbp_data_filepath(season, team_name, league)
     os.makedirs(directory, exist_ok=True)
 
     # Save the DataFrame to a CSV file.
     data.to_csv(file_path, index=False)
     print(f"Play-by-play data saved to {os.path.normpath(file_path)}", flush=True)
 
-def save_checkpoint(current_play_by_play_data: pd.DataFrame, season: str, team_name: str, failed_games: list = None, empty_games: list = None) -> None:
+def save_checkpoint(current_play_by_play_data: pd.DataFrame, season: str, team_name: str, league: str, failed_games: list = None, empty_games: list = None) -> None:
     """
     Saves the currently processed game IDs and failed games to a file for later resumption.
     """
@@ -190,7 +205,7 @@ def save_checkpoint(current_play_by_play_data: pd.DataFrame, season: str, team_n
         empty_games = []
         
     # Creates the directory if it doesn't exist.
-    directory, file_path = get_checkpoint_filepath(season, team_name)
+    directory, file_path = get_checkpoint_filepath(season, team_name, league)
     os.makedirs(directory, exist_ok=True)
 
     # Save both DataFrame and failed_games list as a tuple using pickle
@@ -232,7 +247,7 @@ def fetch_game_pbp(game_id, max_attempts=MAX_ATTEMPTS, min_delay=MIN_DELAY, max_
             print(f"An unexpected error occurred for game ID {game_id}: {e}", flush=True)
             return None
 
-def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
+def load_existing_pbp_data(season: str, team_name: str, league: str) -> pd.DataFrame:
     """
     Loads existing play-by-play data from a CSV file if it exists.
 
@@ -243,8 +258,8 @@ def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: The play-by-play data if the file exists, otherwise an empty DataFrame.
     """
-    if completed_pbp_file_exists(season, team_name):
-        _, file_path = get_completed_pbp_data_filepath(season, team_name)
+    if completed_pbp_file_exists(season, team_name, league):
+        _, file_path = get_completed_pbp_data_filepath(season, team_name, league)
         try:
             return pd.read_csv(file_path)
         except pd.errors.EmptyDataError:
@@ -254,7 +269,7 @@ def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
         print(f"No existing play-by-play data found for {team_name} in {season}.", flush=True)
         return pd.DataFrame()
     
-def load_checkpoint_data(season: str, team_name: str) -> tuple:
+def load_checkpoint_data(season: str, team_name: str, league: str) -> tuple:
     """
     Loads the checkpoint data from a pickle file if it exists.
     Args:
@@ -263,8 +278,8 @@ def load_checkpoint_data(season: str, team_name: str) -> tuple:
     Returns:
         pd.DataFrame: The checkpoint data containing processed game IDs and failed games.
     """
-    if checkpoint_file_exists(season, team_name):
-        _, file_path = get_checkpoint_filepath(season, team_name)
+    if checkpoint_file_exists(season, team_name, league):
+        _, file_path = get_checkpoint_filepath(season, team_name, league)
         
         # Try to load the checkpoint data from the pickle file.
         try:
@@ -282,7 +297,7 @@ def load_checkpoint_data(season: str, team_name: str) -> tuple:
         print(f"No checkpoint data found for {team_name} in season {season}. Starting fresh.", flush=True)
         return pd.DataFrame(), [], []
     
-def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = MAX_ATTEMPTS, min_delay: int = MIN_DELAY, max_delay: int = MAX_DELAY) -> pd.Series:
+def fetch_team_game_ids(season: str, team_id: str, league: str, max_attempts: int = MAX_ATTEMPTS, min_delay: int = MIN_DELAY, max_delay: int = MAX_DELAY) -> pd.Series:
     """
     Fetches all game IDs for a given team and season, with retry logic for timeouts.
     Args:
@@ -296,10 +311,16 @@ def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = MAX_ATTEM
     """
     from nba_api.stats.endpoints import leaguegamefinder as fresh_leaguegamefinder
 
+    season_id = season
+
+    # WNBA seasons are formatted differently because they play entirely in one calendar year.
+    if league == "wnba":
+        season_id = season.split("-")[0]
+
     for attempt in range(1, max_attempts + 1):
         try:
             time.sleep(random.uniform(min_delay, max_delay))
-            gamefinder = fresh_leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season)
+            gamefinder = fresh_leaguegamefinder.LeagueGameFinder(team_id_nullable=team_id, season_nullable=season_id)
             return gamefinder.get_data_frames()[0].GAME_ID
         except (ConnectionError, ReadTimeout, requests.exceptions.ConnectionError):
             print(f"Attempt {attempt}: Timeout or connection error while fetching game IDs for team {team_id} in season {season}.", flush=True)
@@ -310,7 +331,7 @@ def fetch_team_game_ids(season: str, team_id: str, max_attempts: int = MAX_ATTEM
             print(f"An unexpected error occurred while fetching game IDs for team {team_id} in season {season}: {e}", flush=True)
             return None
 
-def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
+def collect_games_pbp_data(game_ids: pd.Series, league: str, team_name: str = "Unknown", season: str = "Unknown") -> pd.DataFrame:
     """
     Collects play-by-play data for a list of game IDs, handling retries and checkpoints.
     Args:
@@ -320,14 +341,15 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
     Returns:
         pd.DataFrame: A DataFrame containing the collected play-by-play data for all games.
     """
-    global CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_FAILED_GAMES, CURRENT_EMPTY_GAMES
+    global CURRENT_PBP_DATA, CURRENT_SEASON, CURRENT_TEAM_NAME, CURRENT_LEAGUE, CURRENT_FAILED_GAMES, CURRENT_EMPTY_GAMES
 
     # Set the state
     CURRENT_SEASON = season
     CURRENT_TEAM_NAME = team_name
+    CURRENT_LEAGUE = league
 
     # Preserve the state of failed_games and empty_games loaded from the checkpoint.
-    checkpoint_data, failed_games, empty_games = load_checkpoint_data(season, team_name)
+    checkpoint_data, failed_games, empty_games = load_checkpoint_data(season, team_name, league)
 
     # Tracking
     successful_games = []
@@ -365,7 +387,7 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
             failed_games.append(game_id)
             CURRENT_FAILED_GAMES = failed_games
             print(f"Failed to fetch data for game ID {game_id}. Retrying later.", flush=True)
-            save_checkpoint(all_play_by_play_data, season, team_name, failed_games)
+            save_checkpoint(all_play_by_play_data, season, team_name, league, failed_games)
             return None
         elif play_by_play_data.empty:
             empty_games.append(game_id)
@@ -379,7 +401,7 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
         # Periodic checkpoint 
         if count % 10 == 0:
             print(f"Checkpointing after processing {count} games...", flush=True)
-            save_checkpoint(all_play_by_play_data, season, team_name, failed_games, empty_games)
+            save_checkpoint(all_play_by_play_data, season, team_name, league, failed_games, empty_games)
 
         CURRENT_PBP_DATA = all_play_by_play_data
 
@@ -400,11 +422,11 @@ def collect_games_pbp_data(game_ids: pd.Series, team_name: str = "Unknown", seas
             print(game_id, flush=True)
 
     # Save the current state to a checkpoint file.
-    save_checkpoint(all_play_by_play_data, season, team_name, failed_games, empty_games)
+    save_checkpoint(all_play_by_play_data, season, team_name, league, failed_games, empty_games)
     
     return all_play_by_play_data
 
-def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False, team_id: str = None) -> pd.DataFrame:
+def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False, team_id: str = None, league: str = "nba") -> pd.DataFrame:
     """
     Gets a team's play-by-play data for every game of a season.
     
@@ -417,19 +439,27 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
         pd.DataFrame: The play-by-play data for the team in the specified season.
     """
     # Loads existing play-by-play data if it exists.
-    if completed_pbp_file_exists(season, team_name):
-        return load_existing_pbp_data(season, team_name)
+    if completed_pbp_file_exists(season, team_name, league):
+        return load_existing_pbp_data(season, team_name, league)
 
     # Gets the team ID from the team name if not provided.
     if team_id is None:
-        team_id = teams.find_teams_by_nickname(team_name)[0]['id']
+        if league == "nba":
+            team_id = teams.find_teams_by_nickname(team_name)[0]['id']
+        elif league == "wnba":
+            print("Available WNBA team nicknames:", [t['nickname'] for t in teams.get_wnba_teams()], flush=True)
+            team_id = teams.find_wnba_teams_by_nickname(team_name)[0]['id']
+            print('found wnba team id', team_id, flush=True)
+        else:
+            raise ValueError(f"Unsupported league: {league}. Supported leagues are 'nba' and 'wnba'.")
+        
         if not team_id:
             print(f"Team '{team_name}' not found. Please check the team name and try again.", flush=True)
             # raise ValueError(f"Team '{team_name}' not found. Please check the team name and try again.")
             return None
 
     # Gets all games for the given team and season as a pandas Series.
-    games_ids = fetch_team_game_ids(season, team_id)
+    games_ids = fetch_team_game_ids(season, team_id, league)
 
     if games_ids is None:
         return None
@@ -439,32 +469,41 @@ def get_team_season_pbp(season: str, team_name: str, save_to_file: bool = False,
         # raise ValueError(f"No games found for team '{team_name}' in season '{season}'. Please check the inputs and try again.")
         return pd.DataFrame()
 
-    all_play_by_play_data = collect_games_pbp_data(games_ids, team_name=team_name, season=season)
+    all_play_by_play_data = collect_games_pbp_data(games_ids, league, team_name=team_name, season=season)
 
     if CURRENT_FAILED_GAMES:
         print(f"Data incomplete for team '{team_name}' in season '{season}'. {len(CURRENT_FAILED_GAMES)} failed games.", flush=True)
         return None
 
     if save_to_file and not all_play_by_play_data.empty:
-        save_pbp_to_csv(all_play_by_play_data, season, team_name)
+        save_pbp_to_csv(all_play_by_play_data, season, team_name, league)
 
     return all_play_by_play_data
 
-def get_all_teams_season_pbp(season: str):
+def get_all_teams_season_pbp(season: str, league: str = "nba"):
     """
     Gets play-by-play data for all NBA teams in a given season.
     Args:
         season (str): The season in the format 'YYYY-YY'. Ex: '2006-07'.
         save_files (bool): If True, saves the play-by-play data to CSV files. Default is False.
     """
-    teams_info = teams.get_teams()
+    global CURRENT_LEAGUE
+    
+    if league == "nba":
+        teams_info = teams.get_teams()
+        CURRENT_LEAGUE = "nba"
+    elif league == "wnba":
+        teams_info = teams.get_wnba_teams()
+        CURRENT_LEAGUE = "wnba"
+
     teams_df = pd.DataFrame(teams_info)
-    total_teams = teams_df.shape[0]
     teams_df = teams_df.sample(frac=1).reset_index(drop=True)  # Shuffle the teams.
 
     successful_processed_teams = []
     failed_processed_teams = []
-    teams_to_process = [(row['nickname'], row['id']) for _, row in teams_df.iterrows()]
+    all_team_keys = set((row['nickname'], row['id']) for _, row in teams_df.iterrows())
+    total_teams = len(all_team_keys)
+    teams_to_process = list(all_team_keys)
 
     # Process teams until the list is empty
     consecutive_failures = 0
@@ -499,10 +538,7 @@ def get_all_teams_season_pbp(season: str):
         if consecutive_failures >= max_consecutive_failures:
             print(f"⚠️ Detected {consecutive_failures} consecutive API failures", flush=True)
             print("API appears to be rate limiting. Saving state and restarting...", flush=True)
-
-            # Re-add the popped team
-            teams_to_process.insert(0, (team_name, team_id))
-
+            
             # Save state before restarting
             with open(state_file, "wb") as f:
                 pickle.dump({
@@ -528,20 +564,22 @@ def get_all_teams_season_pbp(season: str):
         CURRENT_EMPTY_GAMES = []
         
         # Check if the play-by-play data file already exists
-        if completed_pbp_file_exists(season, team_name):
+        if completed_pbp_file_exists(season, team_name, league):
             print(f"Skipping. Play-by-play data already exists in season {season} for {team_name}.", flush=True)
             count += 1
+            successful_processed_teams.append(team_name)
             continue
         
         # Fetch play-by-play data for the team
         time.sleep(random.uniform(TEAM_DELAY_MIN, TEAM_DELAY_MAX))
         print(f"{count}/{total_teams} Processing play-by-play data for season {season}, for {team_name}...")
-        team_season_pbp = get_team_season_pbp(season, team_name, save_to_file=True, team_id=team_id)
+        team_season_pbp = get_team_season_pbp(season, team_name, save_to_file=True, team_id=team_id, league=league)
         
         if team_season_pbp is None:
             # Data gathering was incomplete - add back to the end of the queue
             print(f"Data incomplete for {team_name}. Will retry later.", flush=True)
-            teams_to_process.append((team_name, team_id))
+            if (team_name, team_id) not in teams_to_process:
+                teams_to_process.append((team_name, team_id))
             consecutive_failures += 1
         elif not team_season_pbp.empty:
             count += 1
@@ -549,8 +587,8 @@ def get_all_teams_season_pbp(season: str):
             print(f"Successfully processed {team_name} in season {season}.", flush=True)
             successful_processed_teams.append((team_name, team_id))
             # Checkpoints are useless after successful processing, so we can delete them.
-            if checkpoint_file_exists(season, team_name):
-                _, checkpoint_file_path = get_checkpoint_filepath(season, team_name)
+            if checkpoint_file_exists(season, team_name, league):
+                _, checkpoint_file_path = get_checkpoint_filepath(season, team_name, league)
                 os.remove(checkpoint_file_path)
                 print(f"Checkpoint file {os.path.normpath(checkpoint_file_path)} deleted after successful processing of {team_name}.", flush=True)
         else:
@@ -574,18 +612,25 @@ if __name__ == "__main__":
     # Default behavior gets all teams for the season, but can be overridden by specifying a team name.
     parser.add_argument("--season", type=str, required=True, help="Season in the format 'YYYY-YY'. Ex: '2006-07'")
     parser.add_argument("--team", type=str, help="Team nickname (e.g. 'Celtics'). If omitted, processes all teams.")
+    parser.add_argument("--league", type=str, default="nba", choices=["nba", "wnba"], help="League to fetch data for. Default is NBA.")
 
     args = parser.parse_args()
 
-    state_path = os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle")
+    # Enforce WNBA season format
+    if args.league == "wnba":
+        if not re.fullmatch(r"\d{4}", args.season):
+            print(f"Error: For WNBA, season must be in 'YYYY' format (e.g., '2023'). You provided '{args.season}'.", flush=True)
+            exit(1)
 
     try:
         if args.team:
-            get_team_season_pbp(args.season, args.team, save_to_file=True)
+            get_team_season_pbp(args.season, args.team, save_to_file=True, league=args.league)
         else:
-            get_all_teams_season_pbp(args.season)
-            if os.path.exists(state_path):
-                os.remove(state_path)
+            get_all_teams_season_pbp(args.season, league=args.league)
+            # Clean up state file if it exists
+            filepath = os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle")
+            if os.path.exists(filepath):
+                os.remove(filepath)
     except ValueError as e:
-        print(f"Error: {e}", flush=True)
+        print(f"Error: {e}")
         exit(1)
