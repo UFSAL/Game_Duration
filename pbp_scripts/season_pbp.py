@@ -252,7 +252,7 @@ def load_existing_pbp_data(season: str, team_name: str) -> pd.DataFrame:
     if completed_pbp_file_exists(season, team_name):
         _, file_path = get_completed_pbp_data_filepath(season, team_name)
         try:
-            return pd.read_csv(file_path)
+            return pd.read_csv(file_path, dtype={'GAME_ID': str})
         except pd.errors.EmptyDataError:
             print(f"Warning: The file {os.path.normpath(file_path)} is empty.", flush=True)
             return pd.DataFrame()
@@ -568,6 +568,53 @@ def get_all_teams_season_pbp(season: str):
         for team_name, team_id in failed_processed_teams:
             print(f"Team: {team_name}, ID: {team_id}", flush=True)
 
+def repair_team_season_pbp(season: str, team_name: str):
+    """Verifies completeness of a team-season CSV file and repairs if necessary."""
+
+    print(f"Repairing play-by-play data for {season} {team_name}", flush=True)
+
+    # Load csv file for that team
+    if not completed_pbp_file_exists(season, team_name):
+        print(f"No play-by-play data file found for {season} {team_name}.", flush=True)
+        return None
+
+    # Load the existing play-by-play data
+    existing_pbp_data = load_existing_pbp_data(season, team_name)
+
+    # Request all game IDs
+    team_id = teams.find_teams_by_nickname(team_name)[0]['id']
+    game_ids = fetch_team_game_ids(season, team_id)
+
+    # Compare existing game IDs with the fetched game IDs
+    existing_game_ids = existing_pbp_data['GAME_ID'].astype(str).unique() if not existing_pbp_data.empty else []
+    actual_game_ids = pd.Series(game_ids).astype(str).unique() if game_ids is not None else []
+    missing_game_ids = set(actual_game_ids) - set(existing_game_ids)
+
+    if missing_game_ids:
+        print(f"Found {len(missing_game_ids)} missing game IDs for {team_name} in season {season}.", flush=True)
+        print("Missing game IDs:", flush=True)
+        for game_id in missing_game_ids:
+            print(game_id, flush=True)
+
+        # Collect play-by-play data for the missing game IDs
+        missing_pbp_data = collect_games_pbp_data(pd.Series(list(missing_game_ids)), team_name=team_name, season=season)
+        if missing_pbp_data is not None and not missing_pbp_data.empty:
+            # Append the missing data to the existing DataFrame
+            updated_pbp_data = pd.concat([existing_pbp_data, missing_pbp_data], ignore_index=True)
+            # Save the updated DataFrame back to CSV
+            save_pbp_to_csv(updated_pbp_data, season, team_name)
+            print(f"Updated play-by-play data saved for {team_name} in season {season}.", flush=True)
+    else:
+        print(f"All game IDs present in CSV file for {season} {team_name}.", flush=True)
+
+def repair_season_pbp(season: str):
+    """Verifies completeness of all team-season CSV files and repairs if necessary."""
+    teams_info = teams.get_teams()
+    for team in teams_info:
+        team_name = team['nickname']
+        repair_team_season_pbp(season, team_name)
+    print(f"Repair process completed for all teams in season {season}.", flush=True)
+
 if __name__ == "__main__":
     # Register the signal handler
     signal.signal(signal.SIGINT, signal_handler)
@@ -577,15 +624,22 @@ if __name__ == "__main__":
     # Default behavior gets all teams for the season, but can be overridden by specifying a team name.
     parser.add_argument("--season", type=str, required=True, help="Season in the format 'YYYY-YY'. Ex: '2006-07'")
     parser.add_argument("--team", type=str, help="Team nickname (e.g. 'Celtics'). If omitted, processes all teams.")
-
+    parser.add_argument("--repair", action="store_true", help="Rechecks and verifies all valid games have been processed into the csv file.")
     args = parser.parse_args()
 
+    state_file_path = os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle")
     try:
-        if args.team:
+        if args.repair and args.team:
+            repair_team_season_pbp(args.season, args.team)
+        elif args.repair and not args.team:
+            repair_season_pbp(args.season)
+        elif args.team:
             get_team_season_pbp(args.season, args.team, save_to_file=True)
         else:
             get_all_teams_season_pbp(args.season)
-            os.remove(os.path.join(CHECKPOINTS_ROOT, f"{args.season}_state.pickle"))
     except ValueError as e:
         print(f"Error: {e}")
         exit(1)
+    finally:
+        if os.path.exists(state_file_path):
+            os.remove(state_file_path)
