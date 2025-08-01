@@ -35,6 +35,12 @@ To get the play-by-play data for a **single** team in a specified season and sav
 python season_pbp.py --season 2006-07 --team Celtics
 ```
 
+To get WNBA data, use the `--league wnba` flag. If `--league` is not specified, it defaults to `nba`. If getting WNBA data, the season should be specified in the format `YYYY` because WNBA seasons are played entirely in one calendar year.
+
+```bash
+python season_pbp.py --season 2023 --team Sparks --league wnba
+```
+
 ## Notes
 
 You can run this script in different terminals simultaneously, for different seasons, theoretically increasing the request volume.
