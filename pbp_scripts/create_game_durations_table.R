@@ -27,7 +27,7 @@ tipoff_rows <- possible_tipoffs %>%
 
 # Create Game Durations table with Game ID, Season, Start, and End
 Game_Durations <- tipoff_rows %>%
-  mutate(SEASON = substr(GAME_ID, 4, 5)) %>%
+  mutate(SEASON = substr(GAME_ID, 2, 3)) %>%
   select(GAME_ID, SEASON, START_TIME = WCTIMESTRING) %>%
   left_join(
     last_rows %>%
@@ -74,4 +74,32 @@ Game_Durations <- tipoff_rows %>%
   ) %>%
   
   # Keep only needed columns
+  select(GAME_ID, SEASON, START_TIME, END_TIME, GAME_DURATION_MINUTES)
+
+Game_Durations <- tipoff_rows %>%
+  mutate(SEASON = substr(GAME_ID, 2, 3)) %>%
+  select(GAME_ID, SEASON, START_TIME = WCTIMESTRING) %>%
+  left_join(
+    last_rows %>% select(GAME_ID, END_TIME = WCTIMESTRING),
+    by = "GAME_ID"
+  ) %>%
+  mutate(
+    # Parse 24-hour clock strings into hours/minutes
+    START_HOUR = as.numeric(str_extract(START_TIME, "^\\d+")),
+    START_MIN  = as.numeric(str_extract(START_TIME, "(?<=:)\\d+")),
+    END_HOUR   = as.numeric(str_extract(END_TIME, "^\\d+")),
+    END_MIN    = as.numeric(str_extract(END_TIME, "(?<=:)\\d+")),
+    
+    # Convert to total minutes since midnight
+    START_TOTAL_MIN = START_HOUR * 60 + START_MIN,
+    END_TOTAL_MIN_RAW = END_HOUR * 60 + END_MIN,
+    
+    # Add 24h if the game ended after midnight
+    END_TOTAL_MIN = if_else(END_TOTAL_MIN_RAW < START_TOTAL_MIN,
+                            END_TOTAL_MIN_RAW + 1440,
+                            END_TOTAL_MIN_RAW),
+    
+    # Final duration
+    GAME_DURATION_MINUTES = END_TOTAL_MIN - START_TOTAL_MIN
+  ) %>%
   select(GAME_ID, SEASON, START_TIME, END_TIME, GAME_DURATION_MINUTES)

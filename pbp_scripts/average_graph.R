@@ -6,18 +6,23 @@ overtime_games <- all_data %>%
   filter(PERIOD == 5) %>%
   distinct(GAME_ID)
 
-# Step 2: Filter to regular season games (3rd digit is 2), exclude overtime, and join with durations
+# Step 2: Same as before, but order SEASON properly (96–99, then 00–24)
 season_chart_data <- all_data %>%
   filter(
-    substr(GAME_ID, 3, 3) == "2",                     # Regular season only
-    !GAME_ID %in% overtime_games$GAME_ID             # Remove overtime games
+    substr(GAME_ID, 1, 1) == "2",
+    !GAME_ID %in% overtime_games$GAME_ID
   ) %>%
   distinct(GAME_ID) %>%
   inner_join(Game_Durations, by = "GAME_ID") %>%
   filter(
-    GAME_DURATION_MINUTES >= 105,                    # Trim short/long games
-    GAME_DURATION_MINUTES <= 220,
-    SEASON %in% sprintf("%02d", 12:24)               # Keep seasons 2012–2024
+    GAME_DURATION_MINUTES >= 105,
+    GAME_DURATION_MINUTES <= 180
+  ) %>%
+  mutate(
+    SEASON = factor(
+      SEASON,
+      levels = c(sprintf("%02d", 96:99), sprintf("%02d", 0:24))
+    )
   ) %>%
   group_by(SEASON) %>%
   summarise(AVERAGE_DURATION = mean(GAME_DURATION_MINUTES, na.rm = TRUE)) %>%
@@ -25,10 +30,10 @@ season_chart_data <- all_data %>%
 
 # Step 3: Plot
 ggplot(season_chart_data, aes(x = SEASON, y = AVERAGE_DURATION, group = 1)) +
-  geom_line(color = "#F5275E", size = 1) +
+  geom_line(color = "#F5275E", linewidth = 1) +
   geom_point(color = "black") +
   labs(
-    title = "Average NBA Game Duration (Regular Season, No OT) — 2012–2024",
+    title = "Average NBA Game Duration (Regular Season, No OT) — 1996–2024",
     x = "Season",
     y = "Average Duration (Minutes)"
   ) +
