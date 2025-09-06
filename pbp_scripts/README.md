@@ -1,6 +1,6 @@
-# Game Duration Script
+# Game Duration Scripts
 
-This project analyzes play-by-play data to calculate game durations.
+This project attempts to scrape, clean, and analyze play-by-play data to calculate game durations.
 
 ## Installation
 
@@ -50,6 +50,8 @@ You can run this script in different terminals simultaneously, for different sea
 Make sure to specify the season in the format `YYYY-YY`, and the team's nickname (not full name) as it appears in the NBA data. Example name that would not work: `Boston Celtics`.
 
 The filename `season_pbp.py` is assuming you used `cd ./Game_Duration/pbp_scripts` to change the current working directory to the `pbp_scripts` folder. If you are running the script from a different directory, you will need to provide the full path to the script such as `./Game_Duration/pbp_scripts/season_pbp.py` instead of just `season_pbp.py`. To find your current working directory, you can run the command `pwd` in your terminal or command prompt.
+
+The current script version does not account for disbanded WNBA teams. To resolve this discrepancy, use the `find_missing_wnba_teams.ipynb` notebook.
 
 ## When the script self-restarts, it may lose normal `Ctrl+C` functionality. You can stop the script by using `kill terminal` in VSCode.
 
