@@ -1,353 +1,387 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Season metrics from WNBA/NBA play-by-play.
-
-Inputs: a cleaned play-by-play CSV with at least:
-- GAME_ID
-- EVENTNUM (for ordering)
-- PERIOD (int-like)
-- WCTIMESTRING (like "8:24 PM")
-- PCTIMESTRING (game clock)
-- HOMEDESCRIPTION / NEUTRALDESCRIPTION / VISITORDESCRIPTION
-- EVENTMSGTYPE (numeric code; 3=FT, 6=Foul in NBA/WNBA feeds)
-
-Outputs: season_metrics.csv with columns:
-Season, Average Game Duration (min), Average Challenges Per Game, Average Timeouts Per Game,
-Average Timeout Length (seconds), Average Replays Per Game, Average Replay Length (seconds),
-Average Halftime Length (minutes), Free Throws Per Game, 4th Quarter Length (minutes), Average Fouls Per Game
-"""
-
 import argparse
 import warnings
-from typing import Optional, Tuple
+warnings.filterwarnings("ignore")  # keep terminal quiet
+
+import re
+from datetime import datetime, timedelta
+from typing import Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
 
 
-# ---- Quiet noisy warnings ----------------------------------------------------
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
+# -----------------------------
+# Parsing and utility functions
+# -----------------------------
 
+TIME_FMT = "%I:%M %p"  # e.g., "8:24 PM"
 
-# ---- Helpers -----------------------------------------------------------------
-def infer_season_from_game_id(game_id) -> float:
-    """
-    Many GAME_IDs look like '1029700010' -> '97' maps to 1997; '1042400212' -> '24' maps to 2024.
-    We read characters at positions [3:5].
-    Returns float for pandas compatibility with NaN.
-    """
+def parse_wc_time(s: str) -> Optional[datetime]:
+    """Parse WCTIMESTRING (time-of-day) into a datetime (date-less; we’ll anchor to Jan 1)."""
+    if pd.isna(s):
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    # Some rows show "8:24 PM EST" etc.; strip trailing zone text.
+    s = s.replace("EST", "").replace("EDT", "").replace("CST", "").replace("CDT", "")
+    s = re.sub(r"\s+", " ", s).strip()
     try:
-        s = str(int(game_id))
+        t = datetime.strptime(s, TIME_FMT)
+        # Anchor to an arbitrary date so we can do arithmetic; day=1.
+        t = t.replace(year=2000, month=1, day=1)
+        return t
     except Exception:
-        return np.nan
-    # Defensive: require the common "10..." prefix and at least 5 chars
-    if len(s) < 5 or not s.startswith("10"):
-        return np.nan
-    yy = int(s[3:5])
-    year = 1900 + yy if yy >= 90 else 2000 + yy
-    return float(year)
-
-
-def _to_seconds_from_wctime(series: pd.Series) -> pd.Series:
-    """
-    Parse 'WCTIMESTRING' like '8:24 PM' to wall-clock seconds since day start.
-    Then make it monotonically non-decreasing across the game by adding +86400 when it rolls over.
-    """
-    # Parse to datetime.time anchored to an arbitrary date
-    dt = pd.to_datetime(series, format="%I:%M %p", errors="coerce")
-    sec = (dt.dt.hour.fillna(0).astype(int) * 3600 +
-           dt.dt.minute.fillna(0).astype(int) * 60)
-
-    # Enforce monotonic with day rollover
-    out = sec.copy().astype("float")
-    day_add = 0.0
-    prev = None
-    for i, v in enumerate(out):
-        if np.isnan(v):
-            out.iloc[i] = np.nan if prev is None else prev
-            continue
-        vv = float(v) + day_add
-        if prev is not None and vv < prev:  # crossed midnight
-            day_add += 86400.0
-            vv = float(v) + day_add
-        out.iloc[i] = vv
-        prev = vv
-    return out
-
-
-def _contains_substring(*cols: pd.Series, substr: str) -> pd.Series:
-    """
-    Case-insensitive substring search across multiple text columns.
-    Uses regex=False to avoid unintended grouping warnings.
-    """
-    masks = []
-    for c in cols:
-        if c is None:
-            continue
-        s = c.fillna("").astype(str).str.contains(substr, case=False, regex=False, na=False)
-        masks.append(s)
-    return np.logical_or.reduce(masks) if masks else pd.Series(False, index=cols[0].index if cols else None)
-
-
-def _first_time(g: pd.DataFrame, desc_text: str) -> Optional[float]:
-    """Return the first wall-clock time (seconds) for a given exact desc snippet (case-insensitive) in NEUTRALDESCRIPTION."""
-    nd = g["NEUTRALDESCRIPTION"] if "NEUTRALDESCRIPTION" in g.columns else pd.Series("", index=g.index)
-    mask = nd.fillna("").str.lower().str.contains(desc_text.lower(), regex=False)
-    if not mask.any():
         return None
-    return float(g.loc[mask, "_wall_sec"].iloc[0])
 
-
-def _period_boundary(g: pd.DataFrame, period_num: int, kind: str) -> Optional[float]:
-    """
-    Get wall-clock time for 'Start of Nth Period' or 'End of Nth Period' from NEUTRALDESCRIPTION.
-    kind in {"start", "end"}.
-    """
-    nd = g["NEUTRALDESCRIPTION"] if "NEUTRALDESCRIPTION" in g.columns else pd.Series("", index=g.index)
-    # Build simple substring; avoid regex quirks
-    target = f"{'Start' if kind=='start' else 'End'} of {period_num}st Period"
-    # Also handle 2nd / 3rd / 4th suffixes quickly:
-    suffix = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th"}.get(period_num, f"{period_num}th")
-    target = f"{'Start' if kind=='start' else 'End'} of {suffix} Period"
-    mask = nd.fillna("").str.contains(target, case=False, regex=False)
-    if not mask.any():
+def diff_seconds(t1: Optional[datetime], t2: Optional[datetime]) -> Optional[float]:
+    """Difference t2 - t1 in seconds, handling None and midnight rollover (assume +1 day at most)."""
+    if t1 is None or t2 is None:
         return None
-    return float(g.loc[mask, "_wall_sec"].iloc[0])
+    delta = (t2 - t1).total_seconds()
+    if delta < -12 * 3600:
+        # Rollover (e.g., 11:58 PM -> 12:02 AM next day)
+        t2 = t2 + timedelta(days=1)
+        delta = (t2 - t1).total_seconds()
+    return float(delta)
+
+def safe_mean(x: pd.Series) -> Optional[float]:
+    x = pd.to_numeric(x, errors="coerce").dropna()
+    return float(x.mean()) if len(x) else None
 
 
-def _segments_total_length(g: pd.DataFrame, start_mask: pd.Series, exclude_mask: Optional[pd.Series] = None) -> float:
+# -----------------------------
+# Event detectors (robust regex)
+# -----------------------------
+
+def contains_any(text_series: pd.Series, patterns: List[str]) -> pd.Series:
+    """Case-insensitive substring search for any of the patterns."""
+    s = text_series.fillna("").astype(str)
+    pat = "|".join([re.escape(pat) for pat in patterns])
+    return s.str.contains(pat, case=False, regex=True)
+
+def flag_timeout(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["timeout", "20-second timeout", "full timeout"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_challenge(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["challenge", "coach's challenge", "coaches challenge", "coach challenge"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_replay(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["instant replay", "replay review", "reviewed", "review"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_foul(row_texts: List[pd.Series]) -> pd.Series:
+    # Many forms like "S.FOUL", "P.FOUL", "OFF.FOUL", "SHOOT.FOUL", etc.
+    pats = ["foul"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_start_game(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["start of 1st half", "start of 1st period", "start of first period",
+            "start of game", "tip to "]  # last one helps when start marker missing
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_end_game(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["end of game", "final", "end of 4th period", "end of 4th quarter"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_start_period(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["start of", "start of 2nd period", "start of 3rd period", "start of 4th period",
+            "start of 2nd half", "start of second half"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_end_period(row_texts: List[pd.Series]) -> pd.Series:
+    pats = ["end of 1st period", "end of 2nd period", "end of 3rd period", "end of 4th period",
+            "end of 1st half", "end of first half", "end of 2nd half"]
+    m = sum(contains_any(s, pats) for s in row_texts)
+    return (m > 0)
+
+def flag_half_markers(row_texts: List[pd.Series]) -> Tuple[pd.Series, pd.Series]:
+    """Return (end_of_first_half, start_of_second_half) boolean series."""
+    end_1st_half = sum(contains_any(s, ["end of 1st half", "end of first half"]) for s in row_texts) > 0
+    start_2nd_half = sum(contains_any(s, ["start of 2nd half", "start of second half"]) for s in row_texts) > 0
+    return end_1st_half, start_2nd_half
+
+
+# -----------------------------
+# Per-game metric computation
+# -----------------------------
+
+def per_game_metrics(g: pd.DataFrame) -> Optional[pd.Series]:
     """
-    For each True in start_mask (e.g., timeout or replay events), measure length
-    = wall_time[next_row] - wall_time[this_row], where 'next_row' is the next event
-      whose row does NOT match the same start_mask (and also not excluded by exclude_mask).
-    Sum positive lengths. Returns seconds.
+    Compute metrics for a single GAME_ID.
+    Expects columns:
+      - GAME_ID, PERIOD (int), WCTIMESTRING (e.g. '8:24 PM'), PCTIMESTRING
+      - HOMEDESCRIPTION, NEUTRALDESCRIPTION, VISITORDESCRIPTION
+      - _year (season)
     """
-    idx = g.index.to_list()
-    wall = g["_wall_sec"].values
-    sm = start_mask.values
-    ex = exclude_mask.values if exclude_mask is not None else None
+    # Fast sanity checks
+    if g.empty:
+        return None
 
-    total = 0.0
-    n = len(idx)
-    for i in range(n):
-        if not sm[i]:
-            continue
-        # find next row that is not the same start class (and not excluded if ex given)
-        j = i + 1
-        while j < n and (sm[j] or (ex is not None and ex[j])):
-            j += 1
-        if j < n:
-            delta = float(wall[j]) - float(wall[i])
-            if delta > 0:
-                total += delta
-    return total
+    # Normalize and parse wall-clock times
+    g = g.sort_values(["PERIOD", "EVENTNUM"], kind="mergesort").reset_index(drop=True)
 
+    # Text columns
+    hd = g.get("HOMEDESCRIPTION", pd.Series(dtype=object))
+    nd = g.get("NEUTRALDESCRIPTION", pd.Series(dtype=object))
+    vd = g.get("VISITORDESCRIPTION", pd.Series(dtype=object))
+    text_cols = [hd, nd, vd]
 
-def _safe_mean(s: pd.Series) -> float:
-    s = pd.to_numeric(s, errors="coerce")
-    if s.notna().any():
-        return float(s.mean())
-    return np.nan
+    # Parse WCTIMESTRING
+    wc = g.get("WCTIMESTRING", pd.Series(dtype=object)).apply(parse_wc_time)
 
+    # Season/year
+    season = g.get("_year").iloc[0] if "_year" in g.columns else np.nan
 
-# ---- Per-game metrics --------------------------------------------------------
-def per_game_metrics(g: pd.DataFrame) -> dict:
-    """
-    Compute all requested per-game metrics from one game's PBP.
-    """
-    g = g.sort_values("EVENTNUM", kind="mergesort").copy()
+    # --- Game duration ---
+    # Start candidate: first "start" marker; else first non-empty WCTIMESTRING
+    start_mask = flag_start_game(text_cols)
+    if start_mask.any():
+        t_start = wc[start_mask].iloc[0]
+    else:
+        t_start = wc.dropna().iloc[0] if wc.notna().any() else None
 
-    # Convenience columns
-    hd = g["HOMEDESCRIPTION"] if "HOMEDESCRIPTION" in g.columns else pd.Series("", index=g.index)
-    vd = g["VISITORDESCRIPTION"] if "VISITORDESCRIPTION" in g.columns else pd.Series("", index=g.index)
-    nd = g["NEUTRALDESCRIPTION"] if "NEUTRALDESCRIPTION" in g.columns else pd.Series("", index=g.index)
+    # End candidate: last "end of game" or last event time
+    end_mask = flag_end_game(text_cols)
+    if end_mask.any():
+        t_end = wc[end_mask].iloc[-1]
+    else:
+        t_end = wc.dropna().iloc[-1] if wc.notna().any() else None
 
-    # Build monotonically increasing wall clock seconds
-    g["_wall_sec"] = _to_seconds_from_wctime(g["WCTIMESTRING"] if "WCTIMESTRING" in g.columns else pd.Series("", index=g.index))
+    game_duration_min = None
+    ds = diff_seconds(t_start, t_end)
+    if ds is not None and ds >= 0:
+        game_duration_min = ds / 60.0
 
-    # --- Game Duration (start = Start of 1st Period; end = End of 4th Period or End of Game or last event) ---
-    start = _period_boundary(g, 1, "start")
-    if start is None:
-        # Fallback: first non-NaN wall time
-        start = float(g["_wall_sec"].dropna().iloc[0]) if g["_wall_sec"].notna().any() else np.nan
+    # --- Timeouts & timeout length ---
+    timeout_mask = flag_timeout(text_cols)
+    timeouts = int(timeout_mask.sum())
 
-    # Prefer "End of 4th Period", else "End of Game", else last event time
-    end = _period_boundary(g, 4, "end")
-    if end is None:
-        # try neutraldesc "End of Game"
-        nd_lower = nd.fillna("").str.lower()
-        end_mask = nd_lower.str.contains("end of game", regex=False)
-        if end_mask.any():
-            end = float(g.loc[end_mask, "_wall_sec"].iloc[-1])
-        elif g["_wall_sec"].notna().any():
-            end = float(g["_wall_sec"].dropna().iloc[-1])
-        else:
-            end = np.nan
+    timeout_lengths = []
+    if timeouts > 0:
+        idxs = list(np.where(timeout_mask)[0])
+        for i in idxs:
+            t0 = wc.iloc[i]
+            # length until next non-timeout event (use next event time that has a WCTIMESTRING)
+            j = i + 1
+            t1 = None
+            while j < len(wc):
+                if not timeout_mask.iloc[j] and wc.iloc[j] is not None:
+                    t1 = wc.iloc[j]
+                    break
+                j += 1
+            sec = diff_seconds(t0, t1)
+            # keep only plausible TV timeout window (15s..5min)
+            if sec is not None and 15 <= sec <= 300:
+                timeout_lengths.append(sec)
 
-    game_dur_min = (end - start) / 60.0 if (not np.isnan(start) and not np.isnan(end) and end >= start) else np.nan
+    avg_timeout_len_sec = np.mean(timeout_lengths) if timeout_lengths else None
 
     # --- Challenges ---
-    challenge_mask = _contains_substring(hd, vd, nd, substr="challenge")
-    challenges = int(challenge_mask.sum())
+    challenges = int(flag_challenge(text_cols).sum())
 
-    # --- Timeouts ---
-    timeout_mask = _contains_substring(hd, vd, nd, substr="timeout")
-    timeouts = int(timeout_mask.sum())
-    avg_timeout_len_sec = np.nan
-    if timeouts > 0:
-        ttl = _segments_total_length(g, start_mask=timeout_mask)
-        avg_timeout_len_sec = ttl / timeouts if timeouts > 0 else np.nan
-
-    # --- Replays ---
-    replay_mask = _contains_substring(hd, vd, nd, substr="instant replay")
+    # --- Replays & replay length ---
+    replay_mask = flag_replay(text_cols)
     replays = int(replay_mask.sum())
-    avg_replay_len_sec = np.nan
+
+    replay_lengths = []
     if replays > 0:
-        # If there are consecutive replay rows, treat them as one contiguous block:
-        # We exclude subsequent replay rows when searching for the "next non-replay" event.
-        ttl_rep = _segments_total_length(g, start_mask=replay_mask, exclude_mask=replay_mask)
-        avg_replay_len_sec = ttl_rep / replays if replays > 0 else np.nan
+        ridxs = list(np.where(replay_mask)[0])
+        for i in ridxs:
+            t0 = wc.iloc[i]
+            # end at first subsequent non-replay, non-empty time
+            j = i + 1
+            t1 = None
+            while j < len(wc):
+                if not replay_mask.iloc[j] and wc.iloc[j] is not None:
+                    t1 = wc.iloc[j]
+                    break
+                j += 1
+            sec = diff_seconds(t0, t1)
+            # Plausible replay window (5s..180s); drop weird gaps across quarter breaks, etc.
+            if sec is not None and 5 <= sec <= 180:
+                replay_lengths.append(sec)
 
-    # --- Halftime Length (minutes) ---
-    # Compute all inter-period gaps among first few periods and take the largest (halftime is the longest planned break).
-    gaps_sec = []
-    # Find all "End of N" and "Start of N+1" pairs that exist
-    for p in [1, 2, 3]:
-        e = _period_boundary(g, p, "end")
-        s = _period_boundary(g, p + 1, "start")
-        if e is not None and s is not None and s > e:
-            gaps_sec.append(s - e)
-    halftime_len_min = (max(gaps_sec) / 60.0) if gaps_sec else np.nan
+    avg_replay_len_sec = np.mean(replay_lengths) if replay_lengths else None
 
-    # --- Free Throws ---
-    if "EVENTMSGTYPE" in g.columns:
-        ft = int((g["EVENTMSGTYPE"] == 3).sum())
+    # --- Halftime length (support halves OR quarters) ---
+    # Prefer explicit half markers; else fall back to end of 2nd -> start of 3rd.
+    # End-of-1st-half
+    e1h = sum(contains_any(s, ["end of 1st half", "end of first half"]) for s in text_cols) > 0
+    s2h = sum(contains_any(s, ["start of 2nd half", "start of second half"]) for s in text_cols) > 0
+
+    halftime_len_min = None
+    if e1h.any() if hasattr(e1h, "any") else bool(e1h):
+        # Take last end-of-1st-half time and first start-of-2nd-half time
+        e_mask = sum(contains_any(s, ["end of 1st half", "end of first half"]) for s in text_cols) > 0
+        s_mask = sum(contains_any(s, ["start of 2nd half", "start of second half"]) for s in text_cols) > 0
+        t_e = wc[e_mask].iloc[-1] if wc[e_mask].notna().any() else None
+        t_s = wc[s_mask].iloc[0] if wc[s_mask].notna().any() else None
+        sec = diff_seconds(t_e, t_s)
+        if sec is not None and 120 <= sec <= 1800:  # 2–30 minutes
+            halftime_len_min = sec / 60.0
     else:
-        ft = int(_contains_substring(hd, vd, nd, substr="free throw").sum())
+        # Quarters: End of 2nd Period -> Start of 3rd Period
+        e2_mask = sum(contains_any(s, ["end of 2nd period"]) for s in text_cols) > 0
+        s3_mask = sum(contains_any(s, ["start of 3rd period"]) for s in text_cols) > 0
+        if (e2_mask.any() if hasattr(e2_mask, "any") else bool(e2_mask)) and \
+           (s3_mask.any() if hasattr(s3_mask, "any") else bool(s3_mask)):
+            t_e = wc[e2_mask].iloc[-1] if wc[e2_mask].notna().any() else None
+            t_s = wc[s3_mask].iloc[0] if wc[s3_mask].notna().any() else None
+            sec = diff_seconds(t_e, t_s)
+            if sec is not None and 120 <= sec <= 1800:
+                halftime_len_min = sec / 60.0
 
-    # --- 4th Quarter Length (minutes) ---
-    q4_start = _period_boundary(g, 4, "start")
-    q4_end = _period_boundary(g, 4, "end")
-    if q4_start is not None and q4_end is not None and q4_end > q4_start:
-        q4_len_min = (q4_end - q4_start) / 60.0
+    # --- Free throws (count events mentioning "free throw") ---
+    ft_mask = sum(contains_any(s, ["free throw"]) for s in text_cols) > 0
+    free_throws = int(ft_mask.sum())
+
+    # --- Fouls (count rows mentioning "foul") ---
+    foul_mask = flag_foul(text_cols)
+    fouls = int(foul_mask.sum())
+
+    # --- 4th quarter (or 2nd half) wall-clock length ---
+    q4_len_min = None
+    # Prefer Start of 4th Period -> End of 4th Period
+    s4_mask = sum(contains_any(s, ["start of 4th period", "start of 4th quarter"]) for s in text_cols) > 0
+    e4_mask = sum(contains_any(s, ["end of 4th period", "end of 4th quarter", "end of game"]) for s in text_cols) > 0
+    if (s4_mask.any() if hasattr(s4_mask, "any") else bool(s4_mask)) and \
+       (e4_mask.any() if hasattr(e4_mask, "any") else bool(e4_mask)):
+        t_s4 = wc[s4_mask].iloc[0] if wc[s4_mask].notna().any() else None
+        t_e4 = wc[e4_mask].iloc[-1] if wc[e4_mask].notna().any() else None
+        sec = diff_seconds(t_s4, t_e4)
+        if sec is not None and 60 <= sec <= 7200:
+            q4_len_min = sec / 60.0
     else:
-        q4_len_min = np.nan
+        # For halves-era, approximate 2nd-half length
+        s2h_mask = sum(contains_any(s, ["start of 2nd half", "start of second half"]) for s in text_cols) > 0
+        end_game_mask = flag_end_game(text_cols)
+        if (s2h_mask.any() if hasattr(s2h_mask, "any") else bool(s2h_mask)) and \
+           (end_game_mask.any() if hasattr(end_game_mask, "any") else bool(end_game_mask)):
+            t_s2 = wc[s2h_mask].iloc[0] if wc[s2h_mask].notna().any() else None
+            t_eg = wc[end_game_mask].iloc[-1] if wc[end_game_mask].notna().any() else None
+            sec = diff_seconds(t_s2, t_eg)
+            if sec is not None and 60 <= sec <= 7200:
+                q4_len_min = sec / 60.0
 
-    # --- Fouls ---
-    if "EVENTMSGTYPE" in g.columns:
-        fouls = int((g["EVENTMSGTYPE"] == 6).sum())
-    else:
-        fouls = int(_contains_substring(hd, vd, nd, substr="foul").sum())
-
-    return {
-        "GAME_ID": g["GAME_ID"].iloc[0],
-        "season": g["season"].iloc[0],
-        "game_duration_min": game_dur_min,
+    return pd.Series({
+        "season": season,
+        "game_duration_min": game_duration_min,
         "challenges": challenges,
         "timeouts": timeouts,
         "avg_timeout_len_sec": avg_timeout_len_sec,
         "replays": replays,
         "avg_replay_len_sec": avg_replay_len_sec,
         "halftime_len_min": halftime_len_min,
-        "free_throws": ft,
-        "q4_len_min": q4_len_min,
+        "free_throws": free_throws,
+        "q4_wall_minutes": q4_len_min,
         "fouls": fouls,
-    }
+    })
 
 
-# ---- CLI / Main --------------------------------------------------------------
+# -----------------------------
+# CLI / main
+# -----------------------------
+
 def main():
-    ap = argparse.ArgumentParser(description="Compute season-level metrics from play-by-play.")
-    ap.add_argument("--input", required=True, help="Path to cleaned PBP CSV (wnba_data_clean.csv).")
+    ap = argparse.ArgumentParser(description="Aggregate WNBA per-season game-duration metrics.")
+    ap.add_argument("--input", required=True, help="Path to wnba_data_clean.csv (play-by-play).")
     ap.add_argument("--output", required=True, help="Path to write season_metrics.csv.")
-    ap.add_argument("--show", type=int, default=0, help="Print first N season rows.")
-    ap.add_argument("--progress-every", type=int, default=1000, help="How often to print per-game progress.")
+    ap.add_argument("--show", type=int, default=0, help="Print first N season rows after write.")
+    ap.add_argument("--progress-every", type=int, default=1000, help="Progress print frequency by games.")
+    ap.add_argument("--duration-bounds", type=str, default="",
+                    help="Optional filter like '90,180' to keep only games with duration in [min,max] minutes.")
     args = ap.parse_args()
 
     print(f"Reading PBP: {args.input}")
-    df = pd.read_csv(args.input, low_memory=False)
-
-    # Normalize/ensure season
-    if "season" not in df.columns and "SEASON" in df.columns:
-        df = df.rename(columns={"SEASON": "season"})
-
-    if "season" not in df.columns:
-        df["season"] = df["GAME_ID"].apply(infer_season_from_game_id)
-    else:
-        miss = df["season"].isna()
-        if miss.any():
-            fill = df.loc[miss, "GAME_ID"].apply(infer_season_from_game_id)
-            df.loc[miss, "season"] = fill
-
-    n_nan = int(df["season"].isna().sum())
-    n_distinct = df["season"].nunique(dropna=True)
-    print(f"Seasons found: {n_distinct} distinct; missing season rows: {n_nan}")
-
-    # Basic selects & dtypes
-    keep_cols = [
-        "GAME_ID", "EVENTNUM", "PERIOD", "WCTIMESTRING",
-        "HOMEDESCRIPTION", "NEUTRALDESCRIPTION", "VISITORDESCRIPTION",
-        "EVENTMSGTYPE", "season",
+    # Read only columns we use for speed
+    usecols = [
+        "GAME_ID","EVENTNUM","EVENTMSGTYPE","EVENTMSGACTIONTYPE","PERIOD",
+        "WCTIMESTRING","PCTIMESTRING","HOMEDESCRIPTION","NEUTRALDESCRIPTION","VISITORDESCRIPTION",
+        "_year"
     ]
-    existing = [c for c in keep_cols if c in df.columns]
-    df = df[existing].copy()
-    # Clean period
-    if "PERIOD" in df.columns:
-        df["PERIOD"] = pd.to_numeric(df["PERIOD"], errors="coerce")
+    df = pd.read_csv(args.input, usecols=[c for c in usecols if c in pd.read_csv(args.input, nrows=0).columns])
 
-    # Iterate game-by-game for robustness & progress logs
-    games = []
-    gb = df.groupby("GAME_ID", sort=False)
-    total = gb.ngroups
-    print(f"Found {total} games. Computing metrics…")
-    for i, (_, g) in enumerate(gb, start=1):
+    # Basic cleaning
+    df["PERIOD"] = pd.to_numeric(df.get("PERIOD"), errors="coerce").fillna(0).astype(int)
+
+    # Process per game with periodic progress output
+    game_ids = df["GAME_ID"].dropna().unique().tolist()
+    n_games = len(game_ids)
+    print(f"Found {n_games} games. Computing metrics…")
+
+    rows = []
+    for i, gid in enumerate(game_ids, 1):
+        g = df.loc[df["GAME_ID"] == gid]
         try:
             row = per_game_metrics(g)
-            games.append(row)
+            if row is not None:
+                rows.append(row)
         except Exception as e:
-            # Don't crash the whole job; skip pathological games
-            # but still keep a note in console
-            print(f"  ! Skipped GAME_ID {g['GAME_ID'].iloc[0]} due to error: {e}")
-        if args.progress_every and i % args.progress_every == 0:
-            print(f"  … processed {i}/{total} games")
+            print(f"  ! Skipped GAME_ID {gid} due to error: {e}")
+        if args.progress_every and (i % args.progress_every == 0 or i == n_games):
+            print(f"  … processed {i}/{n_games} games")
 
-    per_game_df = pd.DataFrame(games)
+    per_game_df = pd.DataFrame(rows)
 
-    # Aggregate to season
+    # Optional duration filter
+    if args.duration_bounds:
+        try:
+            lo, hi = [float(x.strip()) for x in args.duration_bounds.split(",")]
+            before = len(per_game_df)
+            per_game_df = per_game_df[
+                per_game_df["game_duration_min"].between(lo, hi, inclusive="both")
+            ]
+            after = len(per_game_df)
+            print(f"Filtered by duration [{lo},{hi}] minutes: kept {after} / {before} games")
+        except Exception:
+            print("  (ignored --duration-bounds; must be like '90,180')")
+
+    # Season aggregation
+    def _mean(series): return safe_mean(series)
+
     season_table = (
         per_game_df
         .groupby("season", dropna=True)
         .agg(
             **{
-                "Average Game Duration (min)": ("game_duration_min", _safe_mean),
-                "Average Challenges Per Game": ("challenges", _safe_mean),
-                "Average Timeouts Per Game": ("timeouts", _safe_mean),
-                "Average Timeout Length (seconds)": ("avg_timeout_len_sec", _safe_mean),
-                "Average Replays Per Game": ("replays", _safe_mean),
-                "Average Replay Length (seconds)": ("avg_replay_len_sec", _safe_mean),
-                "Average Halftime Length (minutes)": ("halftime_len_min", _safe_mean),
-                "Free Throws Per Game": ("free_throws", _safe_mean),
-                "4th Quarter Length (minutes)": ("q4_len_min", _safe_mean),
-                "Average Fouls Per Game": ("fouls", _safe_mean),
+                "Average Game Duration (min)": ("game_duration_min", _mean),
+                "Average Challenges Per Game": ("challenges", _mean),
+                "Average Timeouts Per Game": ("timeouts", _mean),
+                "Average Timeout Length (seconds)": ("avg_timeout_len_sec", _mean),
+                "Average Replays Per Game": ("replays", _mean),
+                "Average Replay Length (seconds)": ("avg_replay_len_sec", _mean),
+                "Average Halftime Length (minutes)": ("halftime_len_min", _mean),
+                "Free Throws Per Game": ("free_throws", _mean),
+                "4th Quarter Length (minutes)": ("q4_wall_minutes", _mean),
+                "Average Fouls Per Game": ("fouls", _mean),
             }
         )
         .reset_index()
         .rename(columns={"season": "Season"})
-        .sort_values("Season", kind="mergesort")
+        .sort_values("Season")
     )
 
-    # Write & optional preview
+    # Tidy types
+    season_table["Season"] = pd.to_numeric(season_table["Season"], errors="coerce")
+
+    # Write
     season_table.to_csv(args.output, index=False)
     print(f"✅ Wrote season table to: {args.output}")
 
-    if args.show and args.show > 0:
-        # Pretty print first N rows
-        show_n = min(args.show, len(season_table))
-        if show_n > 0:
-            print(season_table.head(show_n).to_string(index=False))
+    if args.show:
+        # Pretty print the first N rows
+        print(season_table.head(args.show).to_string(index=False))
 
 
 if __name__ == "__main__":
