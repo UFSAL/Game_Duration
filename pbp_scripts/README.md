@@ -56,3 +56,14 @@ The filename `season_pbp.py` is assuming you used `cd ./Game_Duration/pbp_script
 ## Checkpoints
 
 The script currently supports resuming from checkpoints. If the script times out on a request, it will save the current state to a checkpoint file, and come back to it later. This also works if you stop the script manually with `Ctrl+C`.
+
+# WNBA Cleaning and Analysis
+
+The following scripts are intended to be ran in order to clean the WNBA data, calculate durations and analyze the results.
+
+1. merge_wnba_years.py
+2. remove_outlier.py
+3. filter_and_deduplicate_games.py
+4. compute_game_durations_all_years.py
+
+Note: You may have to change the file paths in the scripts to match your local data locations.
